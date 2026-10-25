@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SMRTk — Complete Development History & Architectural Evolution (v1 → v42.3)</title>
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-secondary: #111827;
+      --bg-card: #161f33;
+      --bg-card-hover: #1c2740;
+      --bg-tweak: #131b2e;
+      --bg-enabled: rgba(16, 185, 129, 0.08);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --border-color: #1e293b;
+      --border-highlight: #334155;
+      --accent-blue: #38bdf8;
+      --accent-indigo: #818cf8;
+      --accent-emerald: #34d399;
+      --accent-amber: #fbbf24;
+      --accent-rose: #fb7185;
+      --accent-purple: #c084fc;
+      --code-bg: #090d16;
+      --shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+    }
+
+    [data-theme="light"] {
+      --bg-primary: #f8fafc;
+      --bg-secondary: #ffffff;
+      --bg-card: #ffffff;
+      --bg-card-hover: #f1f5f9;
+      --bg-tweak: #f8fafc;
+      --bg-enabled: rgba(16, 185, 129, 0.08);
+      --text-primary: #0f172a;
+      --text-secondary: #475569;
+      --text-muted: #64748b;
+      --border-color: #e2e8f0;
+      --border-highlight: #cbd5e1;
+      --accent-blue: #0284c7;
+      --accent-indigo: #4f46e5;
+      --accent-emerald: #059669;
+      --accent-amber: #d97706;
+      --accent-rose: #e11d48;
+      --accent-purple: #7c3aed;
+      --code-bg: #f1f5f9;
+      --shadow: 0 4px 20px -5px rgba(15, 23, 42, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.65;
+      font-size: 15px;
+    }
+
+    code, pre {
+      font-family: "JetBrains Mono", "Fira Code", Consolas, Monaco, monospace;
+      font-size: 0.88em;
+    }
+
+    code {
+      background: var(--code-bg);
+      color: var(--accent-blue);
+      padding: 0.15em 0.4em;
+      border-radius: 5px;
+      border: 1px solid var(--border-color);
+    }
+
+    /* Header */
+    .top-header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.85rem 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+      box-shadow: var(--shadow);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .brand-logo {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-indigo));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 800;
+      font-size: 1.1rem;
+      color: #fff;
+      letter-spacing: -0.5px;
+      flex-shrink: 0;
+    }
+
+    .brand-title h1 {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-title p {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .search-box {
+      position: relative;
+    }
+
+    .search-box input {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-highlight);
+      color: var(--text-primary);
+      padding: 0.45rem 0.85rem;
+      border-radius: 8px;
+      width: 260px;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-box input:focus {
+      border-color: var(--accent-blue);
+    }
+
+    .btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border-highlight);
+      color: var(--text-primary);
+      padding: 0.45rem 0.85rem;
+      border-radius: 8px;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .btn:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--accent-blue);
+    }
+
+    /* Layout */
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      max-width: 1560px;
+      margin: 0 auto;
+      min-height: calc(100vh - 70px);
+    }
+
+    /* Sidebar */
+    .sidebar {
+      position: sticky;
+      top: 69px;
+      height: calc(100vh - 69px);
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      padding: 1.25rem 1rem;
+    }
+
+    .sidebar-title {
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin-bottom: 0.65rem;
+      padding-left: 0.5rem;
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      padding: 0.45rem 0.6rem;
+      border-radius: 7px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.82rem;
+      transition: all 0.15s;
+    }
+
+    .nav-link:hover, .nav-link.active {
+      background: var(--bg-card);
+      color: var(--text-primary);
+    }
+
+    .nav-badge {
+      font-family: monospace;
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 0.1rem 0.4rem;
+      border-radius: 4px;
+      background: var(--code-bg);
+      color: var(--accent-blue);
+      border: 1px solid var(--border-color);
+      flex-shrink: 0;
+      min-width: 58px;
+      text-align: center;
+    }
+
+    /* Main Content */
+    .main-content {
+      padding: 2rem 2.5rem 4rem;
+      max-width: 1180px;
+    }
+
+    /* Hero Banner */
+    .hero {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(129, 140, 248, 0.08));
+      border: 1px solid var(--border-highlight);
+      border-radius: 14px;
+      padding: 1.75rem 2rem;
+      margin-bottom: 2rem;
+    }
+
+    .hero h2 {
+      font-size: 1.65rem;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+      letter-spacing: -0.02em;
+    }
+
+    .hero p {
+      color: var(--text-secondary);
+      font-size: 0.96rem;
+      max-width: 900px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 1rem;
+      margin-top: 1.4rem;
+    }
+
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+    }
+
+    .stat-value {
+      font-size: 1.45rem;
+      font-weight: 800;
+      color: var(--accent-blue);
+      line-height: 1.2;
+    }
+
+    .stat-label {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      margin-top: 0.2rem;
+    }
+
+    /* Filter Bar */
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .filter-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-right: 0.35rem;
+    }
+
+    .filter-pill {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      color: var(--text-secondary);
+      padding: 0.32rem 0.75rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-pill:hover, .filter-pill.active {
+      background: var(--accent-blue);
+      color: #0b0f19;
+      border-color: var(--accent-blue);
+    }
+
+    /* Step Cards */
+    .step-section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 14px;
+      margin-bottom: 1.75rem;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+      transition: border-color 0.2s;
+    }
+
+    .step-section:hover {
+      border-color: var(--border-highlight);
+    }
+
+    .step-header {
+      padding: 1.25rem 1.6rem;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .step-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+    }
+
+    .step-badges {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .version-pill {
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-indigo));
+      color: #fff;
+      font-family: monospace;
+      font-weight: 700;
+      font-size: 0.76rem;
+      padding: 0.18rem 0.6rem;
+      border-radius: 6px;
+    }
+
+    .step-number {
+      font-size: 0.76rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+    }
+
+    .tag {
+      font-size: 0.7rem;
+      font-weight: 600;
+      padding: 0.14rem 0.55rem;
+      border-radius: 999px;
+      border: 1px solid transparent;
+    }
+
+    .tag-agents { background: rgba(192, 132, 252, 0.12); color: var(--accent-purple); border-color: rgba(192, 132, 252, 0.3); }
+    .tag-tools { background: rgba(56, 189, 248, 0.12); color: var(--accent-blue); border-color: rgba(56, 189, 248, 0.3); }
+    .tag-memory { background: rgba(251, 191, 36, 0.12); color: var(--accent-amber); border-color: rgba(251, 191, 36, 0.3); }
+    .tag-security { background: rgba(251, 113, 133, 0.12); color: var(--accent-rose); border-color: rgba(251, 113, 133, 0.3); }
+    .tag-ui { background: rgba(52, 211, 153, 0.12); color: var(--accent-emerald); border-color: rgba(52, 211, 153, 0.3); }
+
+    .step-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: var(--text-primary);
+    }
+
+    .step-body {
+      padding: 1.5rem 1.6rem;
+    }
+
+    .subsection-heading {
+      font-size: 0.82rem;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      font-weight: 700;
+      color: var(--accent-blue);
+      margin-bottom: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .subsection-heading.tweaks-heading {
+      color: var(--accent-amber);
+      margin-top: 1.5rem;
+    }
+
+    .milestone-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .milestone-card {
+      background: var(--bg-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 10px;
+      padding: 1rem 1.2rem;
+    }
+
+    .milestone-title {
+      font-weight: 700;
+      font-size: 0.98rem;
+      margin-bottom: 0.4rem;
+      color: var(--text-primary);
+    }
+
+    .milestone-desc {
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+    }
+
+    .milestone-desc ul {
+      margin: 0.45rem 0 0.45rem 1.25rem;
+    }
+
+    .milestone-desc li {
+      margin-bottom: 0.25rem;
+    }
+
+    .enabled-box {
+      margin-top: 0.65rem;
+      background: var(--bg-enabled);
+      border-left: 3px solid var(--accent-emerald);
+      padding: 0.5rem 0.85rem;
+      border-radius: 0 6px 6px 0;
+      font-size: 0.86rem;
+      color: var(--text-primary);
+    }
+
+    .enabled-box strong {
+      color: var(--accent-emerald);
+    }
+
+    /* Tweaks List */
+    .tweaks-container {
+      background: var(--bg-tweak);
+      border: 1px dashed var(--border-highlight);
+      border-radius: 10px;
+      padding: 1rem 1.25rem;
+    }
+
+    .tweaks-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .tweaks-list li {
+      position: relative;
+      padding-left: 1.25rem;
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+    }
+
+    .tweaks-list li::before {
+      content: "⚡";
+      position: absolute;
+      left: 0;
+      top: 0;
+      font-size: 0.8rem;
+    }
+
+    .tweaks-list li strong {
+      color: var(--text-primary);
+    }
+
+    /* Tables */
+    .table-wrapper {
+      overflow-x: auto;
+      margin-top: 0.85rem;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.86rem;
+      background: var(--bg-card);
+    }
+
+    th, td {
+      padding: 0.75rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: top;
+    }
+
+    th {
+      background: var(--bg-secondary);
+      font-weight: 700;
+      color: var(--text-primary);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr:hover td {
+      background: var(--bg-card-hover);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    /* Responsive & Print */
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        display: none;
+      }
+      .main-content {
+        padding: 1.25rem;
+      }
+    }
+
+    @media print {
+      .top-header, .sidebar, .filter-bar {
+        display: none !important;
+      }
+      .layout {
+        display: block;
+      }
+      .main-content {
+        max-width: 100%;
+        padding: 0;
+      }
+      .step-section {
+        break-inside: avoid;
+        box-shadow: none;
+        border: 1px solid #ccc;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header class="top-header">
+    <div class="brand">
+      <div class="brand-logo">SM</div>
+      <div class="brand-title">
+        <h1>SMRTk — Development History &amp; Architecture</h1>
+        <p>Sandboxed Multi-Agent Research Toolkit (Pre-Research Edition &rarr; v42.3)</p>
+      </div>
+    </div>
+    <div class="controls">
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Search features, tools, tweaks..." />
+      </div>
+      <button class="btn" id="toggleTweaksBtn">Hide Tweaks</button>
+      <button class="btn" id="themeToggleBtn">☀️ Light Mode</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <!-- Sticky Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-title">Development Steps</div>
+      <ul class="nav-list">
+        <li><a href="#overview" class="nav-link"><span class="nav-badge">Summary</span> Overview &amp; Comparison</a></li>
+        <li><a href="#pre-research" class="nav-link"><span class="nav-badge">Pre-Res</span> 0. Pre-Research Edition</a></li>
+        <li><a href="#step-1" class="nav-link"><span class="nav-badge">v1–v2</span> 1. Research Edition Birth</a></li>
+        <li><a href="#step-2" class="nav-link"><span class="nav-badge">v3</span> 2. Adviser, Plan &amp; Async</a></li>
+        <li><a href="#step-3" class="nav-link"><span class="nav-badge">v4–v5</span> 3. Base+Delta &amp; Macro-Breaker</a></li>
+        <li><a href="#step-4" class="nav-link"><span class="nav-badge">v6–v7.1</span> 4. Rich TUI, CLI &amp; Swarm</a></li>
+        <li><a href="#step-5" class="nav-link"><span class="nav-badge">v8–v9</span> 5. SQLite-Vec &amp; Headless Web</a></li>
+        <li><a href="#step-6" class="nav-link"><span class="nav-badge">v10–v11.1</span> 6. The Analyst &amp; Pointers</a></li>
+        <li><a href="#step-7" class="nav-link"><span class="nav-badge">v12–v15.2</span> 7. Airlocks, Stealth &amp; Bulk Vec</a></li>
+        <li><a href="#step-8" class="nav-link"><span class="nav-badge">v17–v21</span> 8. Architect, Skills &amp; Polyglot</a></li>
+        <li><a href="#step-9" class="nav-link"><span class="nav-badge">v22–v25.6</span> 9. Git, Surgical Edit &amp; SSRF</a></li>
+        <li><a href="#step-10" class="nav-link"><span class="nav-badge">v26–v28.5</span> 10. WSL2 Setup &amp; Smoke Tests</a></li>
+        <li><a href="#step-11" class="nav-link"><span class="nav-badge">v29–v32.4</span> 11. KV-Cache, Slicing &amp; Pruning</a></li>
+        <li><a href="#step-12" class="nav-link"><span class="nav-badge">v33–v34.9</span> 12. Decider, Host MCP &amp; ChimeraX</a></li>
+        <li><a href="#step-13" class="nav-link"><span class="nav-badge">v35–v38.1</span> 13. REST, Multimodal &amp; Waves</a></li>
+        <li><a href="#step-14" class="nav-link"><span class="nav-badge">v39–v42.3</span> 14. SMRTk, Skills Lib &amp; Async Jobs</a></li>
+        <li><a href="#reference" class="nav-link"><span class="nav-badge">Reference</span> Full System Inventory</a></li>
+      </ul>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- Overview Hero -->
+      <section id="overview" class="hero">
+        <h2>From a Simple Sandboxed Chat Harness to an Autonomous Multi-Agent Research Platform</h2>
+        <p>
+          Originally created as <em>AI-Forge-Sandbox</em> (the <strong>Pre-Research Edition</strong>) and subsequently expanded into <em>AI-Forge: Research Edition</em> and <strong>SMRTk (Sandboxed Multi-Agent Research Toolkit)</strong> across <strong>42 major and minor architectural steps</strong>. This document traces every core architectural addition alongside the smaller engineering tweaks, bug fixes, security hardenings, and prompt refinements—and explains what each step enabled.
+        </p>
+
+        <div class="stats-grid">
+          <div class="stat-card">
+            <div class="stat-value">3 &rarr; 8</div>
+            <div class="stat-label">Specialized Agent Roles</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">6 &rarr; 22+</div>
+            <div class="stat-label">Sandbox &amp; Meta Tools</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">5 Languages</div>
+            <div class="stat-label">Python, JS, TS, Rust, C++</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">30 / Wave</div>
+            <div class="stat-label">Parallel Tool Execution + 18 Async Jobs</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value">6 Layers</div>
+            <div class="stat-label">Defense-in-Depth Sandbox Isolation</div>
+          </div>
+        </div>
+
+        <div class="table-wrapper" style="margin-top: 1.5rem;">
+          <table>
+            <thead>
+              <tr>
+                <th>Capability</th>
+                <th>Pre-Research Edition (<code>AI-Forge-Sandbox</code>)</th>
+                <th>Initial Research Edition (Step 1 / v1)</th>
+                <th>Current SMRTk Architecture (Step 14 / v42.3)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Core Architecture</strong></td>
+                <td><code>chat_overseer.py</code> + <code>god_tools.py</code> + <code>config.py</code> + minimal <code>Containerfile</code></td>
+                <td><code>chat_overseer.py</code> + <code>god_tools.py</code> + <code>config.py</code> + scientific <code>Containerfile</code></td>
+                <td><code>smrtk.py</code>, <code>sandbox_tools.py</code>, <code>config.py</code>, <code>llm_config.py</code>, <code>mcp_config.py</code>, <code>chimerax_mcp_server.py</code>, <code>setup_wsl2.sh</code>, <code>run_tests.sh</code></td>
+              </tr>
+              <tr>
+                <td><strong>Cognitive Roles</strong></td>
+                <td>Brain, Coder, Summarizer</td>
+                <td>Brain, Coder, Summarizer</td>
+                <td>Brain, Coder, Summarizer, Adviser, Analyst (Vision), Architect (Skills), Decider (System-1), Auxiliary LLM (+ Embedding Model)</td>
+              </tr>
+              <tr>
+                <td><strong>Tool Creation &amp; Editing</strong></td>
+                <td>Full-file Python generation with 3-attempt <code>py_compile</code> check</td>
+                <td>Python First directive + Bioconda channel + <code>py_compile</code> check</td>
+                <td>Polyglot <code>create_tool</code> (Python, JS, TS, Rust, C++) with <code>--help</code> behavioral smoke tests + multi-block <code>edit_code</code> + workspace Git commits</td>
+              </tr>
+              <tr>
+                <td><strong>Context &amp; Memory</strong></td>
+                <td>32k &rarr; 60k limit; 2-step strict JSON schema compaction</td>
+                <td>60k limit; 2-part <em>Current State + Active Plan</em> compaction &amp; auto wake-up</td>
+                <td>120k limit; KV-cache prefix preservation, dynamic tokenizer calibration, SHA-1 tool output pruning (&gt;10 turns), pointer file attachments, 2-step targeted handoff</td>
+              </tr>
+              <tr>
+                <td><strong>Data &amp; Multimodal</strong></td>
+                <td>Plain text stdout only (5,000-char truncation)</td>
+                <td>Plain text + pre-installed <code>pdftotext</code>, <code>tesseract</code>, <code>ffmpeg</code>, <code>pandoc</code></td>
+                <td>Vision (PNG/JPG/WebP/GIF), PDF extraction, Video keyframe sampling, Audio metadata, SQLite + <code>sqlite-vec</code> 4096-d RAG, zero-context SQL bulk embeddings</td>
+              </tr>
+              <tr>
+                <td><strong>Security &amp; Hardware</strong></td>
+                <td>Air-gapped WSL2 + Rootless Podman + LiteLLM API key proxy</td>
+                <td>Added NVIDIA GPU passthrough + 50% VRAM cap + system prompt re-injection</td>
+                <td>C-level SQLite authorizer, SSRF DNS/IP firewall + Playwright route interception, bash <code>rm</code>/<code>unlink</code> overrides, 40% file-shrink guard, read-only layers, ChimeraX firewall</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Category Filter Bar -->
+      <div class="filter-bar">
+        <span class="filter-label">Filter by Focus:</span>
+        <button class="filter-pill active" data-filter="all">All Steps</button>
+        <button class="filter-pill" data-filter="agents">Sub-Agents &amp; Roles</button>
+        <button class="filter-pill" data-filter="tools">Tools &amp; Polyglot</button>
+        <button class="filter-pill" data-filter="memory">Context, RAG &amp; Memory</button>
+        <button class="filter-pill" data-filter="security">Security &amp; Fault Tolerance</button>
+        <button class="filter-pill" data-filter="ui">UI, CLI &amp; Concurrency</button>
+      </div>
+
+      <!-- PRE-RESEARCH EDITION -->
+      <section id="pre-research" class="step-section" data-tags="agents tools memory security">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">Pre-Research (v1.0 – v2.1)</span>
+              <span class="step-number">AI-Forge-Sandbox</span>
+              <span class="tag tag-security">Zero-Trust Sandbox</span>
+              <span class="tag tag-agents">3-Agent Split</span>
+              <span class="tag tag-memory">Hierarchical Registries</span>
+            </div>
+            <h3 class="step-title">Pre-Research Edition (<code>AI-Forge-Sandbox</code>) — The Original Zero-Trust Sandbox, 3-Agent Split &amp; Hierarchical Registries</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Hardened WSL2 Bubble, Rootless Podman Sandbox &amp; Surgical I/O Airlock (<code>chat_overseer.py</code> + <code>god_tools.py</code>)</div>
+              <div class="milestone-desc">
+                Designed a two-tier containment architecture: an air-gapped WSL2 Ubuntu instance (<code>automount=false</code>, <code>interop=false</code>, non-sudo <code>agent</code> user) launching a detached <strong>Rootless Podman</strong> container (<code>ai-forge</code>) over FastMCP stdio with strict kernel caps (<code>--network=slirp4netns</code>, <code>--security-opt=no-new-privileges:true</code>, <code>--cap-drop=ALL</code>, <code>--cpus=4.0</code>, <code>--memory=16g</code>, <code>--pids-limit=1000</code>, <code>--userns=keep-id</code>). Mounted <code>./my_host_input</code> strictly read-only at <code>/app/host_input:ro,Z</code> and isolated each session in <code>sessions/Session_ID_&lt;timestamp&gt;/</code>.
+                <div class="enabled-box"><strong>What it enabled:</strong> Allowed the AI to freely write and execute arbitrary Python and bash scripts inside a persistent Linux workspace with zero risk of corrupting the Windows host or user source data.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Zero-Trust Host Proxy Routing (LiteLLM)</div>
+              <div class="milestone-desc">
+                Removed all API keys and secrets from the sandbox. Configured <code>config.py</code> to use a dummy token (<code>sk-sandbox-fake-key</code>) routed through <code>http://host.containers.internal:4000/v1</code>, where a host-side LiteLLM proxy attached real credentials and forwarded requests to local vLLM/Ollama servers or SSH-tunneled GPUs.
+                <div class="enabled-box"><strong>What it enabled:</strong> Made credential theft from inside the container mathematically impossible.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">The Foundational 3-Agent Split (Brain, Coder, Summarizer), 6 Core Tools &amp; 2-Level Hierarchical Registries</div>
+              <div class="milestone-desc">
+                <ul>
+                  <li><strong>The Brain (<code>chat_overseer.py</code>):</strong> <code>AsyncOpenAI</code> streaming orchestrator with <code>prompt_toolkit</code> ANSI CLI, context usage warnings, and 6 MCP tools (<code>view_tool_registry</code>, <code>execute_bash</code>, <code>view_memory_registry</code>, <code>read_memory</code>, <code>compress_and_store_context</code>, <code>forge_and_register_tool</code>).</li>
+                  <li><strong>The Coder (<code>forge_and_register_tool</code>):</strong> Background coding agent writing standalone Python scripts in <code>/app/workspace/forged_tools/</code> with an automatic <strong>3-attempt <code>py_compile</code> syntax verification loop</strong> (incrementing the random seed on each retry).</li>
+                  <li><strong>The Summarizer (<code>compress_and_store_context</code>):</strong> 2-step strict JSON schema pipeline (<code>"strict": True</code>) extracting deduplicated long-term Markdown memories into <code>memories/</code> (Step 1) and compressing <code>current_history.json</code> with full backup in <code>histories/</code> (Step 2).</li>
+                  <li><strong>2-Level Hierarchical Registries:</strong> Organized <code>tool_registry.json</code> and <code>memory_registry.json</code> by top-level categories so the Brain browsed compact category summaries before inspecting specific tools or memories.</li>
+                </ul>
+                <div class="enabled-box"><strong>What it enabled:</strong> Self-expanding tool creation and long-term memory persistence without syntax errors or registry bloat overwhelming the Brain's context window.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements (v1.0 &rarr; v2.1)</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Per-Session Pixi Micro-Environments:</strong> Auto-initialized <code>pixi init &amp;&amp; pixi add python</code> inside every new session directory so third-party packages stayed isolated per session.</li>
+              <li><strong>Hidden <code>&lt;___CODER_THOUGHTS___&gt;</code> &amp; <code>&lt;___CODER_CODE___&gt;</code> Stream Extraction:</strong> Intercepted and logged the Coder's full internal reasoning and code on the host terminal/log file while stripping them out before returning the tool status to the Brain.</li>
+              <li><strong>Self-Healing Malformed JSON Tool Calls:</strong> Caught <code>json.JSONDecodeError</code> on tool call arguments and returned a structured <code>SYSTEM ERROR</code> tool response so the Brain automatically fixed its JSON syntax.</li>
+              <li><strong>5,000-Char Bash Output Truncation &amp; Redirection Prompt:</strong> Truncated huge bash outputs to a 1,000-char preview and instructed the Brain to redirect output to a file (<code>&gt; filename.txt</code>) and forge a Python script to parse it.</li>
+              <li><strong>Self-Healing Container Reconnection Loop:</strong> Wrapped the MCP stdio client in a recovery loop catching <code>BaseExceptionGroup</code> and dead container drops, sweeping stale <code>~/.podman-run</code> state and seamlessly reconnecting.</li>
+              <li><strong>FastMCP JSON-RPC Stream Protection &amp; Subprocess Isolation (v2.1 — <code>37cedbb</code>):</strong> Added <code>Containerfile</code> (<code>ENV FASTMCP_SHOW_SERVER_BANNER=0</code>) to the repo; silenced <code>httpx</code>/<code>openai</code>/root loggers (<code>logging.CRITICAL</code>) to stop rogue stdout text from corrupting the FastMCP JSON-RPC stream; added <code>stdin=subprocess.DEVNULL</code> and <code>start_new_session=True</code> to <code>execute_bash</code> so child processes and background daemons (like Playwright) could neither steal the MCP stdin pipe nor hang the server; and raised <code>MAX_CONTEXT_TOKENS</code> from <code>32,768</code> to <code>60,000</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 1 -->
+      <section id="step-1" class="step-section" data-tags="agents tools security memory">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v1 – v2</span>
+              <span class="step-number">Step 1</span>
+              <span class="tag tag-tools">GPU &amp; Scientific Stack</span>
+              <span class="tag tag-memory">2-Part Active Plan Compaction</span>
+              <span class="tag tag-security">VRAM Guardrails</span>
+            </div>
+            <h3 class="step-title">Birth of the Research Edition — GPU Passthrough, Scientific Base Image, Bioconda &amp; Autonomous Wake-Up</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">NVIDIA GPU Hardware Passthrough &amp; 50% VRAM Guardrails</div>
+              <div class="milestone-desc">
+                Evolved <code>AI-Forge-Sandbox</code> into <strong><code>AI-Forge: Research Edition</code></strong> by adding <code>--device=nvidia.com/gpu=all</code> to Podman and enforcing strict system prompt rules capping PyTorch VRAM usage at 50% (<code>torch.cuda.set_per_process_memory_fraction(0.5, 0)</code>) and vLLM at <code>--gpu-memory-utilization 0.5</code>.
+                <div class="enabled-box"><strong>What it enabled:</strong> Hardware-accelerated deep learning, structural biology, and GPU compute inside the sandbox without starving the host's own LLM server of VRAM.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Pre-Installed Scientific, Media &amp; Document Linux Base Image + Bioconda Channel</div>
+              <div class="milestone-desc">
+                Upgraded <code>Containerfile</code> to pre-install <code>chromium</code>, <code>xvfb</code>, <code>git</code>, <code>git-lfs</code>, <code>aria2c</code>, <code>jq</code>, <code>pigz</code>, <code>zstd</code>, <code>poppler-utils</code> (<code>pdftotext</code>), <code>tesseract-ocr</code>, <code>ffmpeg</code>, <code>graphviz</code>, <code>pandoc</code>, <code>build-essential</code>, <code>cmake</code>, and <code>gfortran</code>, and auto-injected the <strong><code>bioconda</code></strong> channel into every session's Pixi environment. Added the <strong>"Python First" Directive</strong> (forbidding brittle <code>awk/sed</code> one-liners) and scientific literature API rules (Crossref, PubMed/NCBI E-utilities, Semantic Scholar).
+                <div class="enabled-box"><strong>What it enabled:</strong> Out-of-the-box bioinformatics package installation, OCR/PDF/media processing, headless browser scraping, and publication report compilation.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Hardened 2-Part Context Compaction &amp; Autonomous Wake-Up Protocol</div>
+              <div class="milestone-desc">
+                Prevented the Summarizer LLM from regenerating (and accidentally corrupting) the system prompt during <code>compress_and_store_context</code>: restricted the JSON schema strictly to <code>["user", "assistant"]</code>, required two structured sections in the summary (<strong><code>1. Current State</code></strong> and <strong><code>2. Active Plan &amp; Next Steps</code></strong>), programmatically re-injected the true <code>config.PROMPTS["overseer_system"]</code> at index 0, and added the <strong><code>WAKING UP</code></strong> rule so the Brain immediately resumed work after compaction without waiting for user input.
+                <div class="enabled-box"><strong>What it enabled:</strong> Zero system-prompt drift and seamless autonomous continuation across memory resets.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Context Warning Threshold Tuning:</strong> Raised the context warning trigger in <code>chat_overseer.py</code> from 50% to 75% of <code>MAX_CONTEXT_TOKENS</code> (60,000) so the Brain could complete longer multi-step research chains before compacting.</li>
+              <li><strong>Graceful GPU-to-CPU Prompt Fallback (v2 — <code>7fd031a</code>):</strong> Added system prompt instructions so the Brain and Coder automatically fall back to CPU execution if the host lacks an NVIDIA GPU.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 2 -->
+      <section id="step-2" class="step-section" data-tags="agents memory tools">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v3</span>
+              <span class="step-number">Step 2</span>
+              <span class="tag tag-agents">Sub-Agents</span>
+              <span class="tag tag-memory">Memory &amp; Planning</span>
+            </div>
+            <h3 class="step-title">Master Planning, Strategic Adviser, Universal LLM &amp; Async Sub-Agents</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">End-to-End Asynchronous Sub-Agent Architecture (<code>AsyncOpenAI</code>)</div>
+              <div class="milestone-desc">
+                Converted all sub-agent client calls inside <code>god_tools.py</code> from synchronous <code>OpenAI</code> to <code>AsyncOpenAI</code> (<code>async/await</code>).
+                <div class="enabled-box"><strong>What it enabled:</strong> Non-blocking sub-agent execution inside the FastMCP event loop, paving the way for concurrent tool waves and background tasks.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">The Adviser (<code>consult_adviser</code>), Master Plan (<code>manage_plan</code>) &amp; Universal LLM (<code>query_universal_llm</code>)</div>
+              <div class="milestone-desc">
+                <ul>
+                  <li><strong>The Adviser:</strong> Deep reasoning consultant saving timestamped strategy blueprints to <code>state/&lt;timestamp&gt;_advice.md</code>.</li>
+                  <li><strong>Persistent Master Plan:</strong> <code>manage_plan(action, plan_content)</code> backed by <code>/app/workspace/state/active_plan.md</code>.</li>
+                  <li><strong>Universal LLM Gateway:</strong> <code>query_universal_llm(action="list_models"|"chat")</code> to dynamically discover and prompt any model on the host's Ollama or LiteLLM backend.</li>
+                </ul>
+                <div class="enabled-box"><strong>What it enabled:</strong> Multi-stage project tracking across context compactions, on-demand high-level mathematical/scientific strategy, and dynamic recruitment of specialized models.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>3-Section Context Compaction:</strong> Added a 3rd field (<code>pending_user_input</code>) alongside <code>completed_work_and_facts</code> and <code>current_active_task_and_variables</code> so unanswered user questions were never dropped during compaction.</li>
+              <li><strong>Regex Code Block Extraction:</strong> Replaced brittle <code>.strip("```python")</code> slicing with <code>re.search(r"```(?:python)?\s*\n(.*?)```", ..., re.DOTALL)</code> so conversational preamble from reasoning models never broke tool compilation.</li>
+              <li><strong><code>&lt;think&gt;</code> Tag Parsing:</strong> Added automatic extraction of <code>&lt;think&gt;...&lt;/think&gt;</code> blocks and <code>reasoning_content</code> fields for DeepSeek and Ollama reasoning models.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 3 -->
+      <section id="step-3" class="step-section" data-tags="memory security tools">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v4 – v5</span>
+              <span class="step-number">Step 3</span>
+              <span class="tag tag-memory">Memory</span>
+              <span class="tag tag-security">Fault Tolerance</span>
+            </div>
+            <h3 class="step-title">Layered Base+Delta Environment, Proactive Memory, Live Clock &amp; Macro Loop Breaker</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Layered Micro-Environment (Immutable Base Image + Session Delta Overlay)</div>
+              <div class="milestone-desc">
+                Baked core scientific and scraping packages directly into <code>Containerfile</code> (<code>pandas</code>, <code>numpy</code>, <code>scipy</code>, <code>matplotlib</code>, <code>playwright</code> + Chromium, <code>biopython</code>, <code>rdkit</code>, <code>pyarrow</code>, <code>sqlalchemy</code>, <code>networkx</code>, <code>imagemagick</code>) and created a session-specific delta folder at <code>/app/workspace/custom_packages</code> prepended to <code>PYTHONPATH</code> for dynamic <code># REQUIRES:</code> installs.
+                <div class="enabled-box"><strong>What it enabled:</strong> Cut new session startup time from minutes (<code>pixi init</code>) to milliseconds while avoiding 2GB+ environment duplication per session.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Proactive Fact Storage (<code>store_memory</code>), Live Clock &amp; Macro-Breaker (100/300 Turns)</div>
+              <div class="milestone-desc">
+                Added <code>store_memory</code> for non-destructive long-term fact logging, a sweep-and-replace <code>[SYSTEM CLOCK: YYYY-MM-DD HH:MM:SS]</code> tag for temporal awareness, and an autonomous <strong>Macro-Breaker</strong> that forces a compaction + user check-in at 100 consecutive tool turns and hard-stops runaway execution at 300 turns.
+                <div class="enabled-box"><strong>What it enabled:</strong> Safe, bounded long-horizon autonomy without risk of infinite tool loops or lost intermediate discoveries.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Mid-Turn Tool Output RAM Cache (<code>executed_tool_outputs</code>):</strong> Cached raw tool results in host memory during multi-tool turns so mid-turn compactions still captured full tool outputs.</li>
+              <li><strong>Forgiving <code>execute_bash</code> Parameters &amp; Merged Streams (v5):</strong> Accepted both <code>cmd</code> and <code>command</code> argument names and merged <code>stderr</code> into <code>stdout</code> so compiler warnings and tracebacks appeared in chronological order.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 4 -->
+      <section id="step-4" class="step-section" data-tags="ui">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v6 – v7.1</span>
+              <span class="step-number">Step 4</span>
+              <span class="tag tag-ui">UI, CLI &amp; Swarm</span>
+            </div>
+            <h3 class="step-title">Rich Terminal UI, Headless CLI Flags, Piped STDIN &amp; Multi-Agent Swarm Mode</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Real-Time Rich Terminal Streaming UI &amp; Scriptable UNIX CLI Flags</div>
+              <div class="milestone-desc">
+                Integrated <code>rich.live.Live</code>, <code>Panel</code>, and <code>Markdown</code> for live-rendered streaming panels, and added CLI flags: <code>-p/--prompt</code>, <code>-f/--format</code> (<code>markdown</code>/<code>text</code>), <code>-s/--session</code>, <code>-x/--exit</code> (headless one-shot batch mode), per-role model overrides (<code>--brain</code>, <code>--coder</code>, <code>--summarizer</code>, <code>--adviser</code>), and piped <code>stdin</code> ingestion.
+                <div class="enabled-box"><strong>What it enabled:</strong> Allowed the harness to be used both as an interactive Rich TUI and as a composable UNIX command-line tool in shell pipelines and cron jobs.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>PID-Scoped Container Naming for Swarm Mode (v7.1):</strong> Appended <code>os.getpid()</code> to the Podman container name (<code>forge_sandbox_{active_session}_{os.getpid()}</code>) so multiple agents could run concurrently in separate <code>tmux</code> panes—or collaborate on the same session folder in <strong>Swarm Mode</strong>—without container name collisions.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 5 -->
+      <section id="step-5" class="step-section" data-tags="memory tools security">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v8 – v9</span>
+              <span class="step-number">Step 5</span>
+              <span class="tag tag-memory">Vector DB &amp; RAG</span>
+              <span class="tag tag-tools">Web &amp; File Tools</span>
+            </div>
+            <h3 class="step-title">SQLite + <code>sqlite-vec</code> Vector Search, Headless Web Fetching, <code>write_file</code> &amp; Soft-Delete Archive</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Native Relational + Vector Database (<code>query_sqlite_db</code> &amp; <code>sqlite-vec</code>)</div>
+              <div class="milestone-desc">
+                Integrated the <code>sqlite-vec</code> C extension and built <code>query_sqlite_db(db_name, query, params, text_to_embed)</code> around a standardized <strong>Two-Table Architecture</strong> (relational table + <code>vec0</code> virtual table with 4096-dim <code>FLOAT[4096]</code> vectors linked by <code>rowid</code>), automatically substituting <code>{{EMBEDDING}}</code> placeholders via <code>EMBEDDING_CONFIG</code>.
+                <div class="enabled-box"><strong>What it enabled:</strong> Zero-setup local semantic search, RAG, and relational SQL analytics inside every session workspace.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Headless Browser Scraper (<code>fetch_webpage</code>), <code>write_file</code> &amp; Non-Destructive <code>/archive</code></div>
+              <div class="milestone-desc">
+                Added <code>fetch_webpage</code> using headless Playwright (Chromium) + BeautifulSoup DOM stripping, added <code>write_file</code> (blocking <code>.py</code> writes so executable tools must go through the Coder), and established `/app/workspace/archive/` as a soft-delete destination instead of permanent `rm`.
+                <div class="enabled-box"><strong>What it enabled:</strong> Live rendering of JS-heavy web documentation and clean authoring of reports/configs without risking accidental file deletion.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Zombie Process Reaping (<code>--init</code> &amp; <code>atexit</code>) (v8):</strong> Added <code>--init</code> to Podman to reap orphaned Chromium/subshell zombie processes and registered a host <code>atexit</code> handler to guarantee container cleanup on exit.</li>
+              <li><strong>SQLite Context Protection Caps:</strong> Enforced a 50-row fetch cap and 5,000-character truncation warning in <code>query_sqlite_db</code> to prevent accidental <code>SELECT *</code> floods.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 6 -->
+      <section id="step-6" class="step-section" data-tags="agents tools security">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v10 – v11.1</span>
+              <span class="step-number">Step 6</span>
+              <span class="tag tag-agents">Vision &amp; Analyst</span>
+              <span class="tag tag-security">Micro-Breaker &amp; Security</span>
+            </div>
+            <h3 class="step-title">The Analyst (Vision &amp; Log Miner), Pointer Architecture, Micro-Breaker &amp; Self-Inspection</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">The Analyst Sub-Agent (<code>analyze_file</code> &rarr; Multi-File <code>analyze_files</code>)</div>
+              <div class="milestone-desc">
+                Added <strong>The Analyst (<code>ANALYST_CONFIG</code>)</strong>—a high-context, multimodal Vision sub-agent capable of inspecting multiple images (Base64 data URLs) and massive text/log/CSV files simultaneously, returning a structured JSON <code>executive_summary</code> + <code>full_report</code> saved to <code>state/*_analyst_report.md</code>.
+                <div class="enabled-box"><strong>What it enabled:</strong> Allowed the agent to visually inspect plots it generated with <code>matplotlib</code>, analyze scientific figures, and mine 100k+ char logs without polluting the Brain's context window.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">The Pointer Architecture (<code>execute_bash</code> &amp; <code>fetch_webpage</code>) &amp; Micro-Breaker</div>
+              <div class="milestone-desc">
+                Instead of discarding truncated CLI output (&gt;4,000 chars) or web text (&gt;10,000 chars), the harness saves the full unedited output to <code>/app/workspace/sandbox/</code> and hands the Brain a preview + file pointer to pass to <code>analyze_files</code>. Added the <strong>Micro-Breaker (<code>tool_failure_streaks</code>)</strong> to inject a mandatory strategy pivot when any tool fails consecutively.
+                <div class="enabled-box"><strong>What it enabled:</strong> 100% lossless handling of massive command outputs and automatic recovery from repetitive tool errors.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Read-Only Self-Inspection Mount (v10):</strong> Mounted <code>chat_overseer.py</code> read-only into <code>/app/</code> so the agent could inspect its own harness code for self-debugging.</li>
+              <li><strong>Dedicated Container Debug Log (v10.1):</strong> Routed all container Python logging to <code>/app/workspace/logs/container_debug.log</code> and stripped console handlers to protect the FastMCP stdio pipe.</li>
+              <li><strong>Path Traversal &amp; Shell Injection Hardenings (v11):</strong> Added <code>os.path.realpath</code> / <code>os.path.commonpath</code> checks in <code>write_file</code>, switched <code># REQUIRES:</code> pip installation to <code>shlex.split</code> + <code>shell=False</code>, auto-backed up overwritten tools to <code>/archive</code>, and blocked <code>rm</code> / <code>DROP TABLE</code> / <code>DELETE FROM</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 7 -->
+      <section id="step-7" class="step-section" data-tags="ui memory tools">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v12 – v15.2</span>
+              <span class="step-number">Step 7</span>
+              <span class="tag tag-ui">Verbosity &amp; Slash Cmds</span>
+              <span class="tag tag-memory">Zero-Context Bulk Vec</span>
+              <span class="tag tag-tools">Stealth Search</span>
+            </div>
+            <h3 class="step-title">Decoupled UI Modes, Payload Airlocks, Rolling Summarization, Stealth Web Search &amp; Zero-Context Bulk Embeddings</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Decoupled Format (<code>-f</code>) &amp; 4-Tier Verbosity (<code>-v</code>) with Live Slash Commands (v12)</div>
+              <div class="milestone-desc">
+                Split UI presentation into <code>FORMAT_MODE</code> (<code>markdown</code>, <code>text</code>) and <code>VERBOSITY_MODE</code> (<code>silent</code>, <code>minimal</code>, <code>standard</code>, <code>detailed</code>) with live in-chat slash commands (<code>/silent</code>, <code>/minimal</code>, <code>/standard</code>, <code>/detailed</code>, <code>/text</code>, <code>/markdown</code>).
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Pre-Flight Token Payload Airlocks (v13) &amp; Playwright-Stealth <code>search_web</code> (v14)</div>
+              <div class="milestone-desc">
+                Added <code>tiktoken</code> pre-flight checks (<code>get_payload_tokens</code>) before Adviser, Analyst, and Universal LLM calls to prevent context overflow crashes, and built <code>search_web(query, max_results)</code> using <code>playwright-stealth</code> to scrape DuckDuckGo without triggering bot blocks.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Zero-Context SQL-Driven Bulk Embeddings (<code>batch_generate_embeddings</code>) (v15 – v15.1)</div>
+              <div class="milestone-desc">
+                Created <code>batch_generate_embeddings(db_name, source_query)</code>: the container executes a SQL <code>SELECT rowid, text FROM ...</code> query directly inside SQLite, streams the text batches to the embedding API in C-speed memory, and writes the 4096-d vectors straight into <code>docs_vec</code>.
+                <div class="enabled-box"><strong>What it enabled:</strong> Allowed the agent to vector-index 10,000+ scientific abstracts or records in seconds with <strong>zero data tokens passing through the Brain's context window</strong>.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Atomic JSON Writes (v13):</strong> Updated <code>save_history</code> and <code>save_json</code> to write to a <code>.tmp</code> file and atomically swap via <code>os.replace()</code> to prevent file corruption on crashes.</li>
+              <li><strong>Bulk SQLite <code>executemany</code> &amp; <code>executescript</code> (v15.1):</strong> Upgraded <code>query_sqlite_db</code> to automatically run <code>cursor.executemany()</code> when passed a list-of-lists in <code>params</code> and <code>cursor.executescript()</code> for multi-statement DDL scripts.</li>
+              <li><strong>Split Search vs. Insert Embedding Params (v15.2):</strong> Added dedicated <code>search_text_to_embed</code> alongside <code>text_to_embed</code> in <code>query_sqlite_db</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 8 -->
+      <section id="step-8" class="step-section" data-tags="agents tools security memory">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v17 – v21</span>
+              <span class="step-number">Step 8</span>
+              <span class="tag tag-agents">The Architect &amp; Skills</span>
+              <span class="tag tag-tools">Polyglot Compiler</span>
+              <span class="tag tag-security">Kernel &amp; SQLite Hardening</span>
+            </div>
+            <h3 class="step-title">The Architect &amp; Skills (<code>SKILL.md</code>), Atomic Token Telemetry, SQLite Authorizer, MCP Stdout Shield &amp; Polyglot Tooling</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">The Architect Sub-Agent &amp; Reusable Skills System (<code>commission_architect</code> &amp; <code>load_skill</code>) (v17)</div>
+              <div class="milestone-desc">
+                Added <strong>The Architect (<code>ARCHITECT_CONFIG</code>)</strong> to codify complex workflows into modular <code>/app/workspace/skills/&lt;name&gt;/SKILL.md</code> playbooks. Built <code>build_skills_menu()</code> to dynamically inject lightweight skill descriptions into the Brain's system prompt, paired with <code>load_skill(skill_name)</code> for on-demand loading.
+                <div class="enabled-box"><strong>What it enabled:</strong> Progressive disclosure of procedural knowledge—the agent could accumulate dozens of specialized domain SOPs without bloating its baseline system prompt.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Polyglot Tool Creation Engine (Python, JS, TS, Rust, C++) (v21)</div>
+              <div class="milestone-desc">
+                Installed Rust (<code>cargo</code>/<code>rustc</code>) and Node.js (<code>node</code>/<code>npm</code>/<code>tsx</code>) alongside <code>g++</code> in <code>Containerfile</code>, and upgraded <code>forge_and_register_plugin</code> with language-specific syntax checks and native binary compilation (<code>rustc -O</code>, <code>g++ -O3</code>).
+                <div class="enabled-box"><strong>What it enabled:</strong> Whenever Python was too slow for combinatorial algorithms, sequence alignment, or simulations, the Coder could forge and compile a native C++ or Rust CLI binary tool.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Atomic Token Telemetry (v17), SQLite C-Authorizer (v17) &amp; MCP Stdout Monkey-Patch (v19)</div>
+              <div class="milestone-desc">
+                Added file-locked per-role token accounting (<code>state/token_usage.json</code>), attached a C-level <code>sqlite_authorizer</code> callback deterministically denying <code>SQLITE_DELETE</code> and <code>SQLITE_DROP_TABLE</code>, and monkey-patched <code>JSONRPCMessage.model_validate_json</code> on the host so stray container stdout noise could never crash the FastMCP client.
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Container Binary &amp; Kernel Lockdowns (v19–v20):</strong> Set <code>chmod -R a-w</code> on Pixi site-packages and bin directories, masked <code>/proc/kallsyms</code> and <code>/proc/modules</code>, and mounted <code>/dev/null</code> over <code>su</code>, <code>mount</code>, <code>passwd</code>, and <code>gpasswd</code>.</li>
+              <li><strong>120k Context Window Upgrade (v21):</strong> Doubled <code>MAX_CONTEXT_TOKENS</code> from 60,000 to 120,000 tokens and included MCP tool JSON schema tokens in the pre-flight context calculation.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 9 -->
+      <section id="step-9" class="step-section" data-tags="tools security memory">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v22 – v25.6</span>
+              <span class="step-number">Step 9</span>
+              <span class="tag tag-tools">Git &amp; Surgical Edit</span>
+              <span class="tag tag-memory">Pointer Context</span>
+              <span class="tag tag-security">SSRF &amp; Loop Breaker</span>
+            </div>
+            <h3 class="step-title">In-Workspace Git Versioning, Surgical Code Editing, Pointer Context Attachments, Stream Loop Breaker, Full Sub-Agent Observability &amp; SSRF Hardening</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Automated Workspace Git Repo &amp; <code>surgical_code_edit</code> (v22)</div>
+              <div class="milestone-desc">
+                Auto-initialized a local Git repository (<code>/app/workspace/.git</code>) in every session and added <code>surgical_code_edit</code> so the Brain could delegate targeted search-and-replace patches to the Coder with automatic <code>.surgical.bak</code> backups and timestamped Git commits.
+                <div class="enabled-box"><strong>What it enabled:</strong> Fast, low-token incremental edits on existing scripts without regenerating entire files, backed by full <code>git log</code> / <code>git diff</code> rollback history.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Pointer-Based Context File Attachments (<code>context_filepaths</code>) (v23)</div>
+              <div class="milestone-desc">
+                Added <code>context_filepaths</code> (<code>gather_agent_context</code>) to Coder, Adviser, Architect, and Universal LLM tools so sub-agents read reference files directly from disk inside the container without the Brain having to read and copy-paste their contents.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Stream Repetition Circuit Breaker (v23.1), Full Sub-Agent Observability (v24) &amp; SSRF Firewall (v25)</div>
+              <div class="milestone-desc">
+                <ul>
+                  <li><strong>Stream Loop Detector (<code>detect_text_loop</code>):</strong> Monitored streaming thinking/content buffers in real time, aborting degenerate token repetition loops and auto-retrying at <code>temperature=0.4</code>.</li>
+                  <li><strong>Unified Sub-Agent Sentinel Logging:</strong> Captured 100% of internal thoughts and raw reports across all sub-agents in <code>chat_log_*.txt</code> and <code>detailed</code> mode while keeping saved disk files clean (v24.1).</li>
+                  <li><strong>SSRF &amp; Symlink Firewall:</strong> Added <code>is_safe_web_url()</code> blocking private/loopback/metadata IPs, set <code>--network=slirp4netns:allow_host_loopback=false</code>, added <code>nosuid,nodev</code> mounts, and blocked symlink host escapes.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Expanded Scientific Image &amp; 2GB Shared Memory (v25.1):</strong> Pre-installed <code>scikit-learn</code>, <code>seaborn</code>, <code>statsmodels</code>, <code>openpyxl</code>, <code>duckdb</code>, <code>sympy</code>, <code>pyyaml</code>, <code>h5py</code>, <code>ripgrep</code>, <code>tree</code>, and <code>procps</code>; set <code>--shm-size=2g</code>; and chunked <code>batch_generate_embeddings</code> into sub-batches of 128.</li>
+              <li><strong>Multi-Block Edits &amp; Pre-Flight <code>compile()</code> Check (v25.2 &amp; v25.4):</strong> Upgraded <code>surgical_code_edit</code> to apply multiple search/replace blocks per call and validate modified Python ASTs in memory via <code>compile()</code> before touching disk.</li>
+              <li><strong>Rust Crates, Scholarly Meta Tags &amp; DDG Unwrapping (v25.4):</strong> Added <code>// REQUIRES: crate = "ver"</code> support for Rust Cargo tools, academic meta-tag extraction (<code>citation_doi</code>, <code>citation_title</code>) in <code>fetch_webpage</code>, direct URL unwrapping in <code>search_web</code>, and <code>--tz=local</code> container clock sync (v25.5).</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 10 -->
+      <section id="step-10" class="step-section" data-tags="tools memory ui">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v26 – v28.5</span>
+              <span class="step-number">Step 10</span>
+              <span class="tag tag-tools">Smoke Tests &amp; Installer</span>
+              <span class="tag tag-memory">Calibration &amp; State Ledger</span>
+            </div>
+            <h3 class="step-title">Automated WSL2 Installer (<code>setup_wsl2.sh</code>), Long-Task Refinements, Behavioral Smoke Tests &amp; <code>llm_config.py</code> Split</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Two-Phase WSL2 Provisioning Script (<code>setup_wsl2.sh</code>) (v26) &amp; Dedicated <code>llm_config.py</code> (v28)</div>
+              <div class="milestone-desc">
+                Built an automated installer for Rootless Podman, NVIDIA CDI, Pixi, and LiteLLM proxy on Ubuntu WSL2 (with a read-only <code>--check</code> diagnostic flag), and separated all LLM profile and role configurations into <code>llm_config.py</code>.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Long-Horizon Scientific Workflow Refinements (v27)</div>
+              <div class="milestone-desc">
+                <ul>
+                  <li><strong>Behavioral Pre-Registration Smoke Tests (<code>--help</code>):</strong> Executed newly forged Python/JS/TS tools with <code>--help</code> before registration to catch broken imports and startup crashes that static syntax checks miss.</li>
+                  <li><strong>Dynamic Tokenizer Calibration (<code>token_calibration_ratio</code>):</strong> Continuously calibrated local <code>tiktoken</code> counts against actual API-reported <code>prompt_tokens</code>.</li>
+                  <li><strong>Historical Tool Output Aging &amp; State Ledger:</strong> Compacted old tool outputs in-memory and required the Summarizer to maintain a structured <strong>State Ledger</strong> of verified files, schemas, and metrics.</li>
+                  <li><strong>Near-Match Context Hints:</strong> Used <code>difflib.SequenceMatcher</code> in <code>surgical_code_edit</code> to show the Coder the closest matching lines whenever a search block failed to match.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Smarter Micro-Breaker Exit Codes (v27):</strong> Ignored exit code <code>1</code> from <code>grep</code>/<code>diff</code>/<code>test</code> ("no match") and reset the failure streak whenever the Brain modified command arguments.</li>
+              <li><strong><code>catatonit</code>/<code>tini</code> Detection &amp; UID 1000 Mapping (v28.3–v28.5):</strong> Auto-detected host init binaries before passing <code>--init</code> and replaced the base image's default UID 1000 user so rootless volume permissions mapped cleanly.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 11 -->
+      <section id="step-11" class="step-section" data-tags="memory security tools">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v29 – v32.4</span>
+              <span class="step-number">Step 11</span>
+              <span class="tag tag-memory">KV-Cache &amp; SHA-1 Pruning</span>
+              <span class="tag tag-tools">Regex &amp; Line Slicing</span>
+              <span class="tag tag-security">Failure Forensics</span>
+            </div>
+            <h3 class="step-title">KV-Cache Prefix Preservation, Failure Forensics, Dynamic File Slicing/Regex Filtering, Continuous SHA-1 Tool Pruning &amp; 2-Step Targeted Handoff Compaction</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">LLM KV-Cache Prefix Preservation (v29)</div>
+              <div class="milestone-desc">
+                Moved transient <code>[SYSTEM CLOCK]</code> injection to the very end of the messages array right before inference and stripped it immediately after—preserving 100% of the historical message prefix across turns.
+                <div class="enabled-box"><strong>What it enabled:</strong> Full KV-cache hits on local Ollama/vLLM and cloud servers, drastically cutting prompt processing latency on 50k–100k token contexts.</div>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Sliced, Tail-Mode &amp; Regex-Filtered File Analysis (<code>analyze_files</code>) (v30.3 &amp; v32)</div>
+              <div class="milestone-desc">
+                Upgraded <code>analyze_files</code> with <code>start_line</code>, <code>max_lines</code>, <code>tail_mode=True</code>, and regex pre-filtering (<code>filter_pattern</code> + <code>context_lines</code> via <code>filter_file_lines</code>), plus dynamic 80% context-window scaling (~280k chars) and explicit <code>[COVERAGE BOUNDARY]</code> banners.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Continuous SHA-1 Tool Archival Pruning &amp; 2-Step Targeted Handoff Compaction (v32)</div>
+              <div class="milestone-desc">
+                Archived tool outputs older than 10 turns (&gt;1,000 chars) to disk as <code>tool_&lt;turn&gt;_&lt;name&gt;_&lt;sha1&gt;.txt</code> (indexed in <code>manifest.json</code>) while replacing them in-context with a 300-char preview + file pointer. Replaced slow recursive chunk summarization with a deterministic <strong>2-Step Targeted Handoff</strong> anchored to the Turn 1 objective, <code>active_plan.md</code>, and an automated workspace file inventory.
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong><code>Ctrl+C</code> Dangling Tool Call Reconciliation (v29):</strong> Automatically injected <code>[SYSTEM: Tool execution was aborted by the user]</code> responses for any interrupted <code>tool_calls</code> on <code>KeyboardInterrupt</code> so session history never corrupted.</li>
+              <li><strong>Playwright Route-Level Redirect SSRF Filter (v29.1):</strong> Validated every sub-request and HTTP redirect against <code>is_safe_web_url()</code> inside Playwright's route handler.</li>
+              <li><strong>Sub-Agent Failure Forensics (<code>save_failure_trace</code>) (v30):</strong> Dumped post-mortem <code>failure_*.json</code> traces whenever any sub-agent exhausted its retries.</li>
+              <li><strong>Append Mode &amp; 40% File-Shrink Guard (v30.2):</strong> Added <code>mode="a"</code> to <code>write_file</code> and blocked overwrites that shrink an existing file (&gt;500 chars) by more than 40% (<code>allow_shrink=False</code>).</li>
+              <li><strong>Head + Tail Bash Previews (v30.3) &amp; Bioinformatics Tools (v31):</strong> Showed first 1,500 + last 1,500 chars on truncated bash outputs, added a 5-call Soft Loop Advisory, and pre-installed <code>mafft</code>, <code>hmmer</code>, and <code>pyhmmer</code> in <code>Containerfile</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 12 -->
+      <section id="step-12" class="step-section" data-tags="agents tools security">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v33 – v34.9</span>
+              <span class="step-number">Step 12</span>
+              <span class="tag tag-agents">The Decider (System-1)</span>
+              <span class="tag tag-tools">External MCP &amp; ChimeraX</span>
+              <span class="tag tag-security">Host Firewall</span>
+            </div>
+            <h3 class="step-title">The Decider (<code>fast_decision</code>), External Host MCP Ecosystem (<code>mcp_config.py</code>, <code>manage_external_mcp</code>) &amp; Hardened UCSF ChimeraX Bridge</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">The Decider Sub-Agent (<code>fast_decision</code> / System-1 Rulings) (v33)</div>
+              <div class="milestone-desc">
+                Added <strong>The Decider (<code>DECIDER_CONFIG</code>)</strong> targeting non-autoregressive System-1 endpoints (<code>/v1/systemone</code> with chat completions fallback) for sub-second <code>choice</code>, <code>boolean</code>, <code>score</code> (1–5), and <code>custom</code> regex rulings over text and images.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Dynamic External Host MCP Ecosystem (<code>mcp_config.py</code> &amp; <code>manage_external_mcp</code>) (v34 – v34.4)</div>
+              <div class="milestone-desc">
+                Built an isolated async worker task architecture (<code>mcp_worker</code>) allowing external SSE and stdio MCP servers to be toggled via CLI flags (<code>--mcp</code>, <code>--all-mcp</code>), interactive slash commands (<code>/mcp on|off|list</code>), or autonomously mid-turn by the Brain via the <strong><code>manage_external_mcp</code> Meta-Tool</strong>, with optional human confirmation gates (<code>require_confirmation</code>).
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Hardened UCSF ChimeraX Structural Biology Bridge (<code>chimerax_mcp_server.py</code>) (v34.5 – v34.9)</div>
+              <div class="milestone-desc">
+                Built a FastMCP SSE server on port 21050 bridging WSL2 to Windows 11 UCSF ChimeraX (REST port 21049), guarded by a strict <strong>Host Protection Security Firewall</strong>: removed <code>cx_run_python</code>, enforced a 22-verb visualization whitelist, blocked command chaining (<code>;</code>, <code>|</code>, <code>&amp;</code>, <code>$</code>), and confined <code>cx_save_image</code> to rendering PNG/JPGs into the session's <code>sandbox/</code> folder via WSL2 UNC paths + Base64 REST fallback.
+                <div class="enabled-box"><strong>What it enabled:</strong> Autonomous 3D protein structure loading, AlphaFold/matchmaker alignment, domain coloring, and GPU ray-traced figure generation on the Windows host with zero host filesystem risk.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Multi-Line Terminal Input (<code>\</code>) (v33.1):</strong> Added backslash line continuation in interactive chat mode.</li>
+              <li><strong>Embedded ChimeraX Syntax Cheatsheet (v34.9):</strong> Injected atom-spec and command examples directly into <code>cx_run_command</code>'s docstring so the Brain never confused PyMOL syntax with ChimeraX syntax.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 13 -->
+      <section id="step-13" class="step-section" data-tags="tools ui security">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v35 – v38.1</span>
+              <span class="step-number">Step 13</span>
+              <span class="tag tag-tools">REST &amp; Full Multimodal</span>
+              <span class="tag tag-ui">Fuel Gauge &amp; Parallel Waves</span>
+            </div>
+            <h3 class="step-title">Generalized REST Escape Hatch (<code>execute_rest_call</code>), Full Multimodal Pipelines, Telemetry &amp; Fuel Gauge, and Concurrent Multi-Tool Execution Waves</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">Generalized HTTP REST Client (<code>execute_rest_call</code>) &amp; Full PDF/Video/Audio Multimodal Support (v35 – v35.4)</div>
+              <div class="milestone-desc">
+                <ul>
+                  <li><strong><code>execute_rest_call</code>:</strong> Arbitrary HTTP client supporting multipart file uploads (<code>files</code>), <code>request_filepath</code>, <code>localhost</code> &rarr; <code>host.containers.internal</code> translation, paired request/response archiving in <code>state/rest_calls/</code>, and a hard block on ChimeraX port 21049.</li>
+                  <li><strong>Multimodal <code>analyze_files</code> &amp; <code>query_universal_llm</code>:</strong> Added PDF layout text extraction (<code>pdftotext</code>/<code>pypdf</code>), automatic 5-keyframe video sampling via <code>ffmpeg</code> into the Analyst's Vision pipeline, audio inspection via <code>ffprobe</code>, and multimodal Base64 attachments in <code>query_universal_llm</code>.</li>
+                </ul>
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Live Context Fuel Gauge, Call Telemetry (v36.7 – v37.0) &amp; Concurrent Multi-Tool Waves (v38.0)</div>
+              <div class="milestone-desc">
+                Added atomic tool usage telemetry (<code>state/tool_usage.json</code>), sequential call badges (<code>Brain #N</code>, <code>Tool #M</code>), wall-clock latency timers, and a live <strong>Context Fuel Gauge</strong> (<code>Context: X / 120,000 (Y%)</code>). Replaced sequential tool execution with a dependency-aware <strong>Wave Planner (<code>asyncio.gather</code>)</strong> that executes independent tool calls in parallel while serializing file writer/reader dependencies.
+                <div class="enabled-box"><strong>What it enabled:</strong> Massive wall-clock speedups when executing multiple web searches, database queries, or file analyses in the same turn.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Dynamic GPU CDI Detection (<code>has_gpu_cdi</code>) (v35.7):</strong> Automatically checked if NVIDIA CDI was available on the host and omitted <code>--device=nvidia.com/gpu=all</code> on CPU-only machines so the container booted seamlessly anywhere.</li>
+              <li><strong>Fast <code>esbuild</code> TypeScript Validation (v36.2):</strong> Switched TypeScript syntax checking from slow <code>tsc</code> to instant <code>esbuild | node --check</code>.</li>
+              <li><strong>Unquoted Bash Parser, Function Overrides &amp; <code>SQLITE_ATTACH</code> Block (v36.4):</strong> Injected runtime bash function overrides for <code>rm()</code>, <code>unlink()</code>, and <code>truncate()</code>, and blocked <code>SQLITE_ATTACH</code> in <code>sqlite_authorizer</code>.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 14 -->
+      <section id="step-14" class="step-section" data-tags="agents tools ui">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v39 – v42.3</span>
+              <span class="step-number">Step 14</span>
+              <span class="tag tag-ui">SMRTk Rebrand &amp; Async Jobs</span>
+              <span class="tag tag-agents">Task Delegation &amp; Host Skills</span>
+              <span class="tag tag-tools">22-Test Benchmark Suite</span>
+            </div>
+            <h3 class="step-title">SMRTk Architecture Refactor, Automated Benchmark Suite (<code>run_tests.sh</code>), On-Demand Host Skills Library &amp; Asynchronous Background Execution</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🚀 Main Architectural Milestones</div>
+          <div class="milestone-list">
+            <div class="milestone-card">
+              <div class="milestone-title">SMRTk Nomenclature Refactor (v39 – v40) &amp; 22-Scenario Automated Test Suite (<code>run_tests.sh</code>) (v40.1)</div>
+              <div class="milestone-desc">
+                Renamed core files and tools to clean, self-documenting names (<code>smrtk.py</code>, <code>sandbox_tools.py</code>, <code>sandbox-image</code>, <code>create_tool</code>, <code>edit_code</code>, <code>create_skill</code>, <code>compact_context</code>, <code>query_auxiliary_llm</code>) and built <code>run_tests.sh</code> + <code>tests.tsv</code> to automatically verify all 22 architectural capabilities end-to-end.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">On-Demand Host Skills Library (<code>./skills/</code>, <code>/skills</code> &amp; <code>manage_skills</code>) (v41 – v41.1)</div>
+              <div class="milestone-desc">
+                Added a host-side <code>./skills/</code> repository (bundled with the 17-skill <code>Anthropic</code> pack covering <code>docx</code>, <code>pdf</code>, <code>pptx</code>, <code>xlsx</code>, <code>frontend-design</code>, <code>mcp-builder</code>, <code>webapp-testing</code>, etc.) using <strong>Copy-on-Load Session Isolation</strong>. Skills can be listed, mounted, unmounted, or saved back to the host via CLI flags (<code>--skills</code>, <code>--all-skills</code>), slash commands (<code>/skills</code>), or the Brain's <code>manage_skills</code> meta-tool, with full directory tree inventorying on <code>load_skill</code>.
+              </div>
+            </div>
+            <div class="milestone-card">
+              <div class="milestone-title">Asynchronous Background Jobs &amp; Sub-Agent Delegation (<code>execute_bash(background=True)</code>, <code>delegate_task</code>, <code>manage_jobs</code>, <code>/jobs</code>) (v42 – v42.3)</div>
+              <div class="milestone-desc">
+                Enabled up to <strong>9 concurrent background bash jobs</strong> (up to 10h timeout) and <strong>9 concurrent background sub-agent tasks</strong> via <code>delegate_task(agent_role="analyst"|"adviser"|"coder"|"auxiliary", background=True)</code>, managed via <code>manage_jobs(action="list"|"status"|"wait"|"kill")</code> and <code>/jobs</code>, with non-interleaved turn-boundary harvesting (<code>harvest_background_jobs</code>) and organized <code>/state</code> subdirectories (<code>reports/</code>, <code>failures/</code>, <code>jobs/</code>, <code>rest_calls/</code>).
+                <div class="enabled-box"><strong>What it enabled:</strong> The Brain can launch long simulations or fan out parallel sub-agent analyses in the background while continuing to work or interact with the user.</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="subsection-heading tweaks-heading">🔧 Little Tweaks, Bug Fixes &amp; Refinements</div>
+          <div class="tweaks-container">
+            <ul class="tweaks-list">
+              <li><strong>Direct-to-Disk <code>output_filepath</code> in <code>analyze_files</code> (v42.2):</strong> Allowed the Analyst to save generated markdown reports or extracted tables directly to a specified file path on disk.</li>
+              <li><strong>Auto-Extracted File Pointers in <code>delegate_task</code> (v42.3):</strong> Added regex path scanning inside <code>delegate_task</code> so workspace file paths mentioned in <code>task_instructions</code> are automatically attached to <code>context_filepaths</code> even if the Brain forgets to pass them explicitly.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <!-- COMPLETE REFERENCE -->
+      <section id="reference" class="step-section" data-tags="agents tools memory security ui">
+        <div class="step-header">
+          <div class="step-title-group">
+            <div class="step-badges">
+              <span class="version-pill">v42.3 Reference</span>
+              <span class="step-number">System Inventory</span>
+            </div>
+            <h3 class="step-title">Complete Reference: Agent Roles &amp; Sandbox Tools</h3>
+          </div>
+        </div>
+        <div class="step-body">
+          <div class="subsection-heading">🧠 The 8 Specialized Agent Roles (<code>llm_config.py</code>)</div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Agent Role</th>
+                  <th>Config Key</th>
+                  <th>Primary Responsibility</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>The Brain</strong></td>
+                  <td><code>BRAIN_CONFIG</code></td>
+                  <td>Primary orchestrator, conversation manager, planning, and tool dispatcher.</td>
+                </tr>
+                <tr>
+                  <td><strong>The Coder</strong></td>
+                  <td><code>CODER_CONFIG</code></td>
+                  <td>Polyglot CLI tool builder (<code>create_tool</code>), surgical patcher (<code>edit_code</code>), and delegated coder (<code>delegate_task</code>).</td>
+                </tr>
+                <tr>
+                  <td><strong>The Summarizer</strong></td>
+                  <td><code>SUMMARIZER_CONFIG</code></td>
+                  <td>2-step targeted handoff context compaction (<code>compact_context</code>) maintaining the State Ledger.</td>
+                </tr>
+                <tr>
+                  <td><strong>The Adviser</strong></td>
+                  <td><code>ADVISER_CONFIG</code></td>
+                  <td>Deep scientific, algorithmic, and architectural strategy consultant (<code>consult_adviser</code>).</td>
+                </tr>
+                <tr>
+                  <td><strong>The Analyst</strong></td>
+                  <td><code>ANALYST_CONFIG</code></td>
+                  <td>High-context multimodal Vision, PDF, Video keyframe, and sliced/regex-filtered log inspector (<code>analyze_files</code>).</td>
+                </tr>
+                <tr>
+                  <td><strong>The Architect</strong></td>
+                  <td><code>ARCHITECT_CONFIG</code></td>
+                  <td>Distills multi-step workflows and domain SOPs into reusable <code>SKILL.md</code> playbooks (<code>create_skill</code>).</td>
+                </tr>
+                <tr>
+                  <td><strong>The Decider</strong></td>
+                  <td><code>DECIDER_CONFIG</code></td>
+                  <td>Sub-second System-1 classification, boolean gating, and 1–5 rubric scoring (<code>fast_decision</code>).</td>
+                </tr>
+                <tr>
+                  <td><strong>Auxiliary LLM</strong></td>
+                  <td><code>AUXILIARY_LLM_CONFIG</code></td>
+                  <td>Secondary model queries, translations, and custom multimodal requests (<code>query_auxiliary_llm</code>).</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="subsection-heading" style="margin-top: 2rem;">🛠️ Complete Built-In Tool Inventory (22 Core Tools)</div>
+          <div class="table-wrapper">
+            <table>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th>Tool Name</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><strong>Execution &amp; Async Jobs</strong></td>
+                  <td><code>execute_bash</code></td>
+                  <td>Run foreground (120s) or background (up to 10h) Linux commands with Head+Tail pointer logging.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>delegate_task</code></td>
+                  <td>Delegate tasks to <code>analyst</code>, <code>adviser</code>, <code>coder</code>, or <code>auxiliary</code> in foreground or background.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>manage_jobs</code></td>
+                  <td>Inspect <code>list</code>, <code>status</code>, <code>wait</code> (blocking barrier), or <code>kill</code> background jobs.</td>
+                </tr>
+                <tr>
+                  <td><strong>Code &amp; Tool Engineering</strong></td>
+                  <td><code>create_tool</code></td>
+                  <td>Forge, compile, smoke-test (<code>--help</code>), and register Python, JS, TS, Rust, or C++ CLI tools.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>edit_code</code></td>
+                  <td>Multi-block surgical search-and-replace editing with pre-flight <code>compile()</code> check and Git commit.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>write_file</code></td>
+                  <td>Create or append non-Python files with path-traversal and 40% file-shrink protection.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>view_tool_registry</code></td>
+                  <td>Inspect registered custom tools in compact or detailed mode.</td>
+                </tr>
+                <tr>
+                  <td><strong>Inspection &amp; Web Research</strong></td>
+                  <td><code>analyze_files</code></td>
+                  <td>Multimodal Vision + PDF/Video/Audio + line-sliced/regex-filtered file inspection.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>search_web</code></td>
+                  <td>Headless Playwright-Stealth DuckDuckGo search with direct URL unwrapping.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>fetch_webpage</code></td>
+                  <td>Headless Chromium DOM scraper with academic metadata extraction and pointer logging.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>execute_rest_call</code></td>
+                  <td>Generalized HTTP REST client with multipart file uploads and paired JSON archiving.</td>
+                </tr>
+                <tr>
+                  <td><strong>Sub-Agent Consultations</strong></td>
+                  <td><code>consult_adviser</code></td>
+                  <td>Commission a deep strategic/scientific report saved to <code>state/reports/</code>.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>fast_decision</code></td>
+                  <td>Ultra-fast System-1 <code>choice</code>, <code>boolean</code>, <code>score</code>, or <code>custom</code> regex decision.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>query_auxiliary_llm</code></td>
+                  <td>Query any model on Ollama or LiteLLM proxy with full sampling and media controls.</td>
+                </tr>
+                <tr>
+                  <td><strong>SQLite &amp; Vector RAG</strong></td>
+                  <td><code>query_sqlite_db</code></td>
+                  <td>Relational SQL + <code>sqlite-vec</code> k-NN vector search, <code>executemany</code> bulk inserts, and C authorizer.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>batch_generate_embeddings</code></td>
+                  <td>Zero-context SQL-driven bulk vector embedding generator (chunked in batches of 128).</td>
+                </tr>
+                <tr>
+                  <td><strong>Memory &amp; Planning</strong></td>
+                  <td><code>manage_plan</code></td>
+                  <td>Read or update <code>/app/workspace/state/active_plan.md</code>.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>store_memory</code></td>
+                  <td>Proactively store permanent facts/findings to <code>/app/workspace/memories/</code>.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>view_memory_registry</code></td>
+                  <td>List all saved long-term memory records.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>read_memory</code></td>
+                  <td>Retrieve a specific archival memory JSON record.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>compact_context</code></td>
+                  <td>Trigger 2-step targeted handoff context compaction.</td>
+                </tr>
+                <tr>
+                  <td><strong>Skills &amp; External MCP</strong></td>
+                  <td><code>create_skill</code></td>
+                  <td>Commission the Architect to author a new <code>SKILL.md</code> playbook.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>load_skill</code></td>
+                  <td>Load a <code>SKILL.md</code> playbook and its bundled file inventory into context.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>manage_skills</code></td>
+                  <td>Dynamically <code>list</code>, <code>mount</code>, <code>unmount</code>, or <code>save</code> skills between host and session.</td>
+                </tr>
+                <tr>
+                  <td></td>
+                  <td><code>manage_external_mcp</code></td>
+                  <td>Dynamically <code>list</code>, <code>enable</code>, or <code>disable</code> external host MCP servers mid-session.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script>
+    // Theme Toggle
+    const themeToggleBtn = document.getElementById('themeToggleBtn');
+    themeToggleBtn.addEventListener('click', () => {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      themeToggleBtn.textContent = next === 'dark' ? '☀️ Light Mode' : '🌙 Dark Mode';
+    });
+
+    // Show / Hide Tweaks Toggle
+    const toggleTweaksBtn = document.getElementById('toggleTweaksBtn');
+    let tweaksVisible = true;
+    toggleTweaksBtn.addEventListener('click', () => {
+      tweaksVisible = !tweaksVisible;
+      document.querySelectorAll('.tweaks-heading, .tweaks-container').forEach(el => {
+        el.classList.toggle('hidden', !tweaksVisible);
+      });
+      toggleTweaksBtn.textContent = tweaksVisible ? 'Hide Tweaks' : 'Show Tweaks';
+    });
+
+    // Category Filter Pills
+    const filterPills = document.querySelectorAll('.filter-pill');
+    const stepSections = document.querySelectorAll('.step-section');
+    const searchInput = document.getElementById('searchInput');
+    let activeCategory = 'all';
+
+    function applyFilters() {
+      const query = searchInput.value.trim().toLowerCase();
+      stepSections.forEach(sec => {
+        const tags = (sec.getAttribute('data-tags') || '').split(' ');
+        const matchesCategory = activeCategory === 'all' || tags.includes(activeCategory);
+        const matchesSearch = !query || sec.innerText.toLowerCase().includes(query);
+        sec.classList.toggle('hidden', !(matchesCategory && matchesSearch));
+      });
+    }
+
+    filterPills.forEach(pill => {
+      pill.addEventListener('click', () => {
+        filterPills.forEach(p => p.classList.remove('active'));
+        pill.classList.add('active');
+        activeCategory = pill.getAttribute('data-filter');
+        applyFilters();
+      });
+    });
+
+    searchInput.addEventListener('input', applyFilters);
+  </script>
+</body>
+</html>

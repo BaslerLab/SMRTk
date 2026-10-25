@@ -1,0 +1,30 @@
+# Runtime Session Data & Workspaces
+sessions/
+my_host_input/
+logs/
+custom_packages/
+*.log
+*.tmp
+*.bak
+*.db
+*.sqlite
+proxy.log
+
+# Python Environment & Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pixi/
+.pytest_cache/
+
+# Local Environment Variables & Secrets
+.env
+*.env
+.env.*
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

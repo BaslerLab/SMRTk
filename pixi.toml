@@ -1,0 +1,19 @@
+[workspace]
+channels = ["conda-forge"]
+name = "ai_workspace"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+python = ">=3.14.4,<3.15"
+openai = ">=2.33.0,<3"
+mcp = ">=1.27.0,<2"
+fastmcp = ">=3.2.4,<4"
+prompt_toolkit = ">=3.0.52,<4"
+rich = ">=15.0.0,<16"
+tiktoken = ">=0.12.0,<0.13"
+
+[pypi-dependencies]
+sqlite-vec = ">=0.1.9, <0.2"
