@@ -15,10 +15,12 @@ and operating system (Linux, macOS, Windows/WSL) with automatic backend fallback
 Usage:
   render_figs.py check-env
   render_figs.py size             FILE.pdf|IMG [PAGE]
-  render_figs.py page-text        FILE.pdf
+  render_figs.py page-text        FILE.pdf [--compare-text manuscript_indexed.txt] [--extra-txt supp.txt]
+  render_figs.py find-text        FILE.pdf QUERY [--units px|pt|frac] [--ref-dpi 200]
   render_figs.py render           FILE.pdf|IMG OUTDIR [--dpi 200] [--pages 1-3,5] [--prefix page] [--grid]
-  render_figs.py crop             FILE.pdf|IMG PAGE X0 Y0 X1 Y1 [--dpi 400] [--units pt|px|frac] [--ref-dpi 200] [--out crop.jpg]
-  render_figs.py video            VIDEO_OR_DIR OUTDIR [--frames 6]
+  render_figs.py crop             FILE.pdf|IMG PAGE X0 Y0 X1 Y1 [OUT.jpg] [--dpi 400] [--units pt|px|frac] [--ref-dpi 200] [--out crop.jpg]
+  render_figs.py batch-crop       SPEC.json | FILE.pdf|IMG PAGE X0,Y0,X1,Y1:OUT1.jpg [X0,Y0,X1,Y1:OUT2.jpg ...] [--dpi 400] [--units px|pt|frac]
+  render_figs.py video            VIDEO_OR_DIR OUTDIR [--frames 6] [--compare-text manuscript_indexed.txt]
   render_figs.py wrap-images      IMG_OR_DIR [IMG2 ...] OUT.pdf [--dpi 200]
   render_figs.py extract-embedded FILE.pdf OUTDIR
   render_figs.py contact-sheet    CROPS_DIR [--out contact_sheet.png] [--cols 3]
@@ -362,6 +364,20 @@ def _is_image_file(path):
     return os.path.splitext(path)[1].lower() in ('.png', '.jpg', '.jpeg', '.tif', '.tiff', '.bmp', '.webp')
 
 
+def _open_image_white_bg(img_path):
+    """Open an image file and composite any alpha/transparency channel onto pure white (255, 255, 255) before converting to RGB."""
+    Image, _, _, _ = _ensure_pil()
+    im = Image.open(img_path)
+    if im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info):
+        rgba = im.convert("RGBA")
+        bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        im = Image.alpha_composite(bg, rgba).convert("RGB")
+    else:
+        im = im.convert("RGB")
+    im.load()
+    return im
+
+
 def _natural_sort_key(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', s)]
 
@@ -369,7 +385,7 @@ def _natural_sort_key(s):
 def wrap_images_to_pdf(inputs, out_pdf, ref_dpi=200.0):
     """Wrap one or more image files (or directories of images) into an uncompressed /Page PDF
     compatible with `annotate_pdf.py` (where 1 image pixel == 1 px at `--ref-dpi`)."""
-    Image, _, _, _ = _ensure_pil()
+    _ensure_pil()
     img_paths = []
     for inp in inputs:
         if os.path.isdir(inp):
@@ -388,7 +404,7 @@ def wrap_images_to_pdf(inputs, out_pdf, ref_dpi=200.0):
     next_num = 3  # 1 = Catalog, 2 = Pages
 
     for p_idx, img_p in enumerate(img_paths, 1):
-        im = Image.open(img_p).convert("RGB")
+        im = _open_image_white_bg(img_p)
         w_px, h_px = im.size
         w_pt = w_px * (72.0 / ref_dpi)
         h_pt = h_px * (72.0 / ref_dpi)
@@ -490,7 +506,7 @@ def render_page_to_pil(pdf_path, page_1idx, dpi, ref_dpi=200.0):
     Image, _, _, _ = _ensure_pil()
 
     if _is_image_file(pdf_path):
-        im = Image.open(pdf_path).convert("RGB")
+        im = _open_image_white_bg(pdf_path)
         if abs(dpi - ref_dpi) > 1e-3:
             scale = dpi / ref_dpi
             im = im.resize((max(1, int(round(im.width * scale))), max(1, int(round(im.height * scale)))), Image.LANCZOS)
@@ -608,18 +624,87 @@ def parse_pages(spec, n):
     return sorted(p for p in out if 1 <= p <= n)
 
 
+_PUA_SYMBOL_MAP = str.maketrans({
+    "\uf06c": "λ",
+    "\uf06d": "µ",
+    "\uf0b1": "±",
+    "\uf044": "Δ",
+    "\uf061": "α",
+    "\uf062": "β",
+    "\uf067": "γ",
+    "\uf0b0": "°",
+    "\uf0d7": "×",
+    "\uf0ae": "→",
+    "\uf0ac": "←",
+    "\uf0ab": "↔",
+})
+
+
+def _normalize_pdf_pua(s):
+    return s.translate(_PUA_SYMBOL_MAP) if s else ""
+
+
+def _extract_words_with_bboxes_pt(pdf_path):
+    """Extract per-page list of `(word_str, x0_pt, y0_pt, x1_pt, y1_pt)` using PyMuPDF or Poppler `pdftotext -bbox`."""
+    if _is_image_file(pdf_path):
+        return []
+    fitz = _get_fitz()
+    if fitz is not None:
+        try:
+            doc = fitz.open(pdf_path)
+            pages_words = []
+            for pg in doc:
+                wlist = []
+                for w_tup in pg.get_text("words"):
+                    # w_tup: (x0, y0, x1, y1, word_str, block_no, line_no, word_no)
+                    w_s = _normalize_pdf_pua(str(w_tup[4])).strip()
+                    if w_s:
+                        wlist.append((w_s, float(w_tup[0]), float(w_tup[1]), float(w_tup[2]), float(w_tup[3])))
+                pages_words.append(wlist)
+            return pages_words
+        except Exception:
+            pass
+
+    pdftotext = _find_binary("pdftotext")
+    if pdftotext:
+        try:
+            out = subprocess.check_output([pdftotext, "-bbox", pdf_path, "-"], text=True, errors="replace")
+            pages_words = []
+            for m_pg in re.finditer(r"<page\b[^>]*>(.*?)</page>", out, re.S):
+                pg_xml = m_pg.group(1)
+                wlist = []
+                for m_w in re.finditer(
+                    r'<word\s+xMin="([-\d.]+)"\s+yMin="([-\d.]+)"\s+xMax="([-\d.]+)"\s+yMax="([-\d.]+)"[^>]*>(.*?)</word>',
+                    pg_xml,
+                    re.S,
+                ):
+                    x0, y0, x1, y1 = map(float, m_w.groups()[:4])
+                    raw_w = m_w.group(5).replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
+                    w_s = _normalize_pdf_pua(raw_w).strip()
+                    if w_s:
+                        wlist.append((w_s, x0, y0, x1, y1))
+                pages_words.append(wlist)
+            return pages_words
+        except Exception:
+            pass
+
+    return []
+
+
 def extract_pdf_page_texts(pdf_path):
     """Extract text per page from a PDF using PyMuPDF, pdftotext, pypdf, or pure-Python Flate stream parsing."""
+    if _is_image_file(pdf_path):
+        return [""]
     fitz = _get_fitz()
     if fitz is not None:
         doc = fitz.open(pdf_path)
-        return [pg.get_text("text") or "" for pg in doc]
+        return [_normalize_pdf_pua(pg.get_text("text") or "") for pg in doc]
 
     pdftotext = _find_binary("pdftotext")
     if pdftotext:
         try:
             out = subprocess.check_output([pdftotext, pdf_path, "-"], text=True, errors="replace")
-            pages = out.split("\x0c")
+            pages = [_normalize_pdf_pua(p) for p in out.split("\x0c")]
             if pages and pages[-1] == "":
                 pages.pop()
             return pages
@@ -630,7 +715,7 @@ def extract_pdf_page_texts(pdf_path):
         try:
             mod = __import__(mod_name)
             reader = mod.PdfReader(pdf_path)
-            return [pg.extract_text() or "" for pg in reader.pages]
+            return [_normalize_pdf_pua(pg.extract_text() or "") for pg in reader.pages]
         except Exception:
             pass
 
@@ -657,7 +742,7 @@ def extract_pdf_page_texts(pdf_path):
             elif m_tj.group(2) is not None:
                 parts = re.findall(rb"\(([^()\\]*(?:\\.[^()\\]*)*)\)", m_tj.group(2))
                 chunks.append("".join(p.decode("latin1", errors="ignore") for p in parts))
-        return " ".join(chunks)
+        return _normalize_pdf_pua(" ".join(chunks))
 
     page_texts = []
     for onum in sorted(obj_map.keys()):
@@ -694,32 +779,234 @@ def _edit_dist_le1(a, b):
     return True
 
 
-def print_pdf_page_text_map(pdf_path, compare_txt_path=None):
+_ID_TOKEN_PAT = re.compile(
+    r"\b(?:[A-Za-z]{1,6}[_-]?\d{2,6}[A-Za-z0-9_-]*|[A-Z]{2,5}_[A-Za-z]{0,3}\d{2,6}[A-Za-z0-9_-]*|[\u0394\u2206][A-Za-z0-9_-]{2,}|P[a-z]{3,4}[A-Z]-[A-Za-z0-9_-]+|[a-z]{3}[A-Z]\b|[a-z]{2,4}[A-Z]{2,5}\d*\b|[A-Z][a-z]{1,4}-[A-Z]{2,5}\b)"
+)
+
+
+def _extract_docx_all_text_stdlib(docx_path):
+    """Extract all plain text from a .docx file using pure Python stdlib."""
+    import zipfile as _zf
+    import xml.etree.ElementTree as _ET
+    try:
+        with _zf.ZipFile(docx_path, "r") as dz:
+            root = _ET.fromstring(dz.read("word/document.xml"))
+        w_t = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+        return " ".join(n.text or "" for n in root.iter(w_t))
+    except Exception:
+        return ""
+
+
+def _lookup_bbox_str_for_token(page_words, token, ref_dpi=200.0):
+    """Find `@200dpi` pixel bounding box(es) for `token` among `page_words` `(word_str, x0, y0, x1, y1)`."""
+    if not page_words:
+        return ""
+    scale = ref_dpi / 72.0
+    hits = []
+    t_low = token.lower()
+    for w_s, x0, y0, x1, y1 in page_words:
+        if t_low in w_s.lower():
+            bx = (int(round(x0 * scale)), int(round(y0 * scale)), int(round(x1 * scale)), int(round(y1 * scale)))
+            hits.append(f"[{bx[0]}, {bx[1]}, {bx[2]}, {bx[3]}]")
+    if hits:
+        return f" @200dpi_px={hits[0]}" + (f" (+{len(hits)-1} more)" if len(hits) > 1 else "")
+    return ""
+
+
+def _detect_axis_tick_anomalies(p_words, page_clean_text, scale=200.0 / 72.0):
+    """Scan aligned numeric labels on a PDF page for non-monotonic axis ticks, 10x typo outliers in
+    geometric/arithmetic tick progressions (e.g. 0, 2000, 100, 50, 25, 12.5), and negative ticks on linear fold-change axes."""
+    warnings = []
+    if not p_words:
+        return warnings
+    num_items = []
+    for w_s, x0, y0, x1, y1 in p_words:
+        s_clean = w_s.strip().replace("\u2212", "-")
+        if re.fullmatch(r"-?\d+(?:\.\d+)?", s_clean):
+            try:
+                val = float(s_clean)
+                num_items.append((val, s_clean, x0, y0, x1, y1))
+            except ValueError:
+                pass
+    if len(num_items) < 4:
+        return warnings
+
+    # Group into horizontal alignments (same y0 within 4 pt) and vertical alignments (same x0 within 6 pt or x1 within 6 pt)
+    clusters = []
+    # Horizontal clusters
+    by_y = sorted(num_items, key=lambda t: (round(t[3] / 4.0), t[2]))
+    cur = []
+    for item in by_y:
+        if not cur or abs(item[3] - cur[-1][3]) <= 4.5:
+            cur.append(item)
+        else:
+            if len(cur) >= 4:
+                clusters.append(("horizontal", sorted(cur, key=lambda t: t[2])))
+            cur = [item]
+    if len(cur) >= 4:
+        clusters.append(("horizontal", sorted(cur, key=lambda t: t[2])))
+
+    # Vertical clusters (left-aligned or right-aligned y-axis ticks)
+    by_x = sorted(num_items, key=lambda t: (round(t[4] / 6.0), t[3]))
+    cur = []
+    for item in by_x:
+        if not cur or abs(item[4] - cur[-1][4]) <= 6.5 or abs(item[2] - cur[-1][2]) <= 6.5:
+            cur.append(item)
+        else:
+            if len(cur) >= 4:
+                clusters.append(("vertical", sorted(cur, key=lambda t: t[3])))
+            cur = [item]
+    if len(cur) >= 4:
+        clusters.append(("vertical", sorted(cur, key=lambda t: t[3])))
+
+    has_linear_fc = bool(
+        re.search(r"\b(?:fold[\s-]+change|FC)\b", page_clean_text, re.I)
+        and not re.search(r"\b(?:log2?|ln)\s*(?:fold[\s-]+change|FC)\b", page_clean_text, re.I)
+    )
+    seen_seqs = set()
+    for orient, seq in clusters:
+        # Split sub-sequences if gap is huge (> 160 pt)
+        sub_seqs = []
+        sub = [seq[0]]
+        for item in seq[1:]:
+            prev = sub[-1]
+            dist = abs(item[2] - prev[4]) if orient == "horizontal" else abs(item[3] - prev[5])
+            if dist <= 140.0:
+                sub.append(item)
+            else:
+                if len(sub) >= 4:
+                    sub_seqs.append(sub)
+                sub = [item]
+        if len(sub) >= 4:
+            sub_seqs.append(sub)
+
+        for sseq in sub_seqs:
+            vals = [t[0] for t in sseq]
+            strs = [t[1] for t in sseq]
+            seq_key = (orient, tuple(strs))
+            if seq_key in seen_seqs:
+                continue
+            seen_seqs.add(seq_key)
+            bx0 = int(round(min(t[2] for t in sseq) * scale))
+            by0 = int(round(min(t[3] for t in sseq) * scale))
+            bx1 = int(round(max(t[4] for t in sseq) * scale))
+            by1 = int(round(max(t[5] for t in sseq) * scale))
+            bbox_s = f"@200dpi_px=[{bx0}, {by0}, {bx1}, {by1}]"
+
+            # Check 1: Non-monotonic sequence where all but 1 step go in the same direction (e.g. 0, 2000, 100, 50, 25, 12.5)
+            pos_vals = [v for v in vals if v > 0]
+            if len(vals) >= 5:
+                diffs = [vals[k + 1] - vals[k] for k in range(len(vals) - 1)]
+                n_pos = sum(1 for d in diffs if d > 0)
+                n_neg = sum(1 for d in diffs if d < 0)
+                if (n_pos == 1 and n_neg >= 3) or (n_neg == 1 and n_pos >= 3):
+                    warnings.append(
+                        f"Non-monotonic {orient} axis tick sequence [{', '.join(strs)}] {bbox_s} — "
+                        f"verify whether an axis tick label is out of order or has an extra digit!"
+                    )
+
+            # Check 2: Geometric progression outlier (e.g. 2000, 100, 50, 25, 12.5 where ratios are 20, 2, 2, 2)
+            if len(pos_vals) >= 4:
+                ratios = [pos_vals[k] / pos_vals[k + 1] for k in range(len(pos_vals) - 1) if pos_vals[k + 1] != 0]
+                if len(ratios) >= 3:
+                    from collections import Counter
+                    rounded_r = [round(r, 3) for r in ratios]
+                    mode_r, mode_cnt = Counter(rounded_r).most_common(1)[0]
+                    if mode_cnt >= len(ratios) - 1 and mode_cnt >= 2 and mode_r not in (0.0, 1.0):
+                        outliers = [r for r in rounded_r if abs(r - mode_r) > 0.25 * abs(mode_r)]
+                        if len(outliers) == 1:
+                            warnings.append(
+                                f"Disproportionate step in {orient} axis tick sequence [{', '.join(strs)}] {bbox_s} "
+                                f"(consecutive step ratios={['%.2g' % r for r in ratios]}; expected constant factor {mode_r:g}x) — "
+                                f"check for a 10x typo (e.g. '2000' instead of '200')!"
+                            )
+
+            # Check 3: Negative ticks on a linear Fold Change (FC) axis
+            if has_linear_fc and any(v < 0 for v in vals) and any(v > 0 for v in vals):
+                warnings.append(
+                    f"Axis tick sequence [{', '.join(strs)}] {bbox_s} includes negative values on a page with "
+                    f"'Fold change (FC)' — linear fold change is strictly positive (unless log-transformed or signed change)!"
+                )
+    return warnings
+
+
+def print_pdf_page_text_map(pdf_path, compare_txt_path=None, extra_txt_paths=None):
     """Print a concise per-page figure label and text map for a PDF, plus optional cross-check against manuscript text."""
     pages = extract_pdf_page_texts(pdf_path)
     sizes = get_pdf_page_sizes_pt(pdf_path)
+    pages_words = _extract_words_with_bboxes_pt(pdf_path)
+    fitz = _get_fitz()
+    fitz_doc = fitz.open(pdf_path) if fitz is not None else None
     n_pages = max(len(pages), len(sizes))
-    fig_pat = re.compile(r"\b(?:Supplementary\s+|Supplemental\s+|Extended\s+Data\s+)?(?:Figure|Fig\.?|Table|Scheme)\s*S?\d+[A-Za-z]?\b", re.I)
+    fig_pat = re.compile(r"\b(?:Supplementary\s+|Supplemental\s+|Extended\s+Data\s+)?(?:Figure|Fig\.?|Table|Scheme)\s*(?:EV|ED|S)?\d+[A-Za-z]?\b", re.I)
 
     if not compare_txt_path and os.path.isfile("scratch_audit/manuscript_indexed.txt"):
         compare_txt_path = "scratch_audit/manuscript_indexed.txt"
 
-    ms_text = ""
+    ms_text_parts = []
+    if compare_txt_path and os.path.isfile(compare_txt_path):
+        ms_text_parts.append(open(compare_txt_path, encoding="utf-8", errors="replace").read())
+    for ep in (extra_txt_paths or []):
+        if ep and os.path.isfile(ep):
+            if ep.lower().endswith(".docx"):
+                ms_text_parts.append(_extract_docx_all_text_stdlib(ep))
+            else:
+                ms_text_parts.append(open(ep, encoding="utf-8", errors="replace").read())
+
+    # Auto-discover companion .docx files in the same folder as pdf_path so strain/reagent tables (e.g. Reagents_Table.docx) are included
+    pdf_dir = os.path.dirname(os.path.abspath(pdf_path))
+    if os.path.isdir(pdf_dir) and ms_text_parts:
+        for fn in sorted(os.listdir(pdf_dir)):
+            if fn.lower().endswith(".docx") and not fn.startswith("~$"):
+                ms_text_parts.append(_extract_docx_all_text_stdlib(os.path.join(pdf_dir, fn)))
+
+    ms_text = "\n".join(ms_text_parts)
     ms_alnum_ids = set()
     ms_words = set()
-    if compare_txt_path and os.path.isfile(compare_txt_path):
-        ms_text = open(compare_txt_path, encoding="utf-8", errors="replace").read()
-        # Collect strain/gene/construct/compound codes from manuscript text
-        for tok in re.findall(r"\b(?:[A-Za-z]{1,6}-?\d{2,6}[A-Za-z0-9_-]*|[\u0394\u2206][A-Za-z0-9_-]+|P[a-z]{3,4}[A-Z]-[A-Za-z0-9_-]+|[a-z]{3}[A-Z]\b)", ms_text):
+    fig_legends_by_id = {}  # normalized fig id like '1', 'S3', 'EV2' -> legend text
+    if ms_text:
+        for tok in _ID_TOKEN_PAT.findall(ms_text):
             ms_alnum_ids.add(tok)
         for w in re.findall(r"\b[a-zA-Z]{6,}\b", ms_text):
             ms_words.add(w.lower())
+        # Parse per-figure legends so we can cross-check short reporter/construct tokens per figure
+        cur_fig_id = None
+        for ln in ms_text.splitlines():
+            s_ln = re.sub(r"^\s*(?:\[[^\]]+\]\s*)+", "", ln).strip()
+            m_fl = re.match(
+                r"^(?:Supplementary\s+|Supplemental\s+|Extended\s+Data\s+)?(?:Figure|Fig\.?)\s*((?:EV|ED|S)?\d+)\b[.:–—\s-]",
+                s_ln,
+                re.I,
+            )
+            if m_fl and len(s_ln) > 25:
+                cur_fig_id = m_fl.group(1).upper()
+                if re.match(r"^(?:Supplementary|Supplemental)\s+(?:Figure|Fig)", s_ln, re.I) and not cur_fig_id.startswith("S"):
+                    cur_fig_id = "S" + cur_fig_id
+                fig_legends_by_id.setdefault(cur_fig_id, []).append(s_ln)
+            elif cur_fig_id and s_ln and len(fig_legends_by_id.get(cur_fig_id, [])) < 12:
+                if re.match(r"^(?:Table|References|Bibliography|Materials|Methods|Supplementary\s+Table)\b", s_ln, re.I):
+                    cur_fig_id = None
+                else:
+                    fig_legends_by_id[cur_fig_id].append(s_ln)
+
+    _REPORTER_TOKS = ("mNG", "mGL", "mNeonGreen", "mGreenLantern", "EGFP", "eGFP", "GFP", "mCherry", "mScarlet", "RFP", "YFP", "CFP", "tdTomato")
 
     print(f"=== PDF PAGE-TO-FIGURE TEXT MAP: {os.path.basename(pdf_path)} ({n_pages} page(s)) ===")
     for i in range(n_pages):
         txt = pages[i] if i < len(pages) else ""
         w_pt, h_pt = sizes[i] if i < len(sizes) else (0.0, 0.0)
-        clean = re.sub(r"\s+", " ", txt).strip()
+        p_words = pages_words[i] if i < len(pages_words) else []
+
+        # Detect garbled / unmapped /ToUnicode PDF font glyphs (e.g. Reporting Summary or Supplementary PDFs with broken font encodings)
+        non_ws = [c for c in txt if not c.isspace()]
+        bad_chars = sum(
+            1 for c in non_ws
+            if ord(c) < 32 or ord(c) == 0xFFFD or (0xE000 <= ord(c) <= 0xF8FF) or ord(c) == 0x7F
+        )
+        garbled_font = len(non_ws) >= 10 and (bad_chars / float(len(non_ws)) > 0.10)
+        printable_txt = "".join(c if (ord(c) >= 32 and ord(c) != 0x7F and ord(c) != 0xFFFD) else " " for c in txt)
+        clean = re.sub(r"\s+", " ", printable_txt).strip()
+
         labels = []
         for m in fig_pat.finditer(clean):
             lbl = m.group(0)
@@ -727,19 +1014,51 @@ def print_pdf_page_text_map(pdf_path, compare_txt_path=None):
                 labels.append(lbl)
         lbl_str = ", ".join(labels[:6]) if labels else "(no explicit 'Figure X' text string in PDF layer)"
         print(f"Page {i+1:2d} ({w_pt:.0f}x{h_pt:.0f} pt | @200dpi={int(round(w_pt*200/72))}x{int(round(h_pt*200/72))} px) | Detected labels: {lbl_str}")
+        if garbled_font:
+            bad_pct = 100.0 * bad_chars / max(1, len(non_ws))
+            print(
+                f"         !! [UNMAPPED / GARBLED PDF FONT ENCODING WARNING] Page {i+1} text stream contains "
+                f"{bad_pct:.0f}% control/unmapped characters (missing /ToUnicode CMap) — PDF text extraction is "
+                f"unreliable on this page; MUST visually inspect rendered PNG at >=200 DPI!"
+            )
         if clean:
             print(f"         Text preview   : {clean[:180]}{'...' if len(clean) > 180 else ''}")
         else:
             print("         Text preview   : (raster-only / outlined text — inspect rendered PNG)")
 
-        if ms_text and clean:
-            # 1. Check PDF strain/construct/gene tokens that are absent from manuscript text but within edit-distance 1 of a manuscript token
-            pdf_ids = set(re.findall(r"\b(?:[A-Za-z]{1,6}-?\d{2,6}[A-Za-z0-9_-]*|[\u0394\u2206][A-Za-z0-9_-]+|P[a-z]{3,4}[A-Z]-[A-Za-z0-9_-]+|[a-z]{3}[A-Z]\b)", clean))
+        n_vec_words = len(p_words) if p_words else len(clean.split())
+        n_raster_imgs = 0
+        if fitz_doc is not None and i < len(fitz_doc):
+            try:
+                n_raster_imgs = len(fitz_doc[i].get_images(full=True))
+            except Exception:
+                n_raster_imgs = 0
+
+        if n_vec_words < 15:
+            print(
+                f"         !! [RASTER-HEAVY PAGE WARNING] Page {i+1} contains only {n_vec_words} vector word(s); "
+                f"labels/axes are rasterized or outlined — MUST visually inspect rendered PNG at >=200 DPI!"
+            )
+        elif n_raster_imgs >= 1:
+            print(
+                f"         !! [MIXED VECTOR + RASTER PAGE WARNING] Page {i+1} has {n_vec_words} vector words AND "
+                f"{n_raster_imgs} embedded raster image(s) — text inside rasterized sub-panels (e.g. heatmaps, "
+                f"micrographs, or exported sub-figures) does NOT appear in the PDF text layer; visually inspect all panels!"
+            )
+
+        # Check numeric axis tick sequences on this page
+        for ax_warn in _detect_axis_tick_anomalies(p_words, clean):
+            print(f"         !! [AXIS TICK SEQUENCE ANOMALY] Page {i+1}: {ax_warn}")
+
+        if ms_text and clean and not garbled_font:
+            # 1. Check PDF strain/construct/gene/FP tokens that are absent from manuscript text but within edit-distance 1 of a manuscript token
+            pdf_ids = set(_ID_TOKEN_PAT.findall(clean))
             for pid in sorted(pdf_ids):
                 if pid not in ms_alnum_ids and pid not in ms_text:
                     near = [mid for mid in sorted(ms_alnum_ids) if _edit_dist_le1(pid, mid)]
                     if near:
-                        print(f"         !! PDF-vs-DOCX ID MISMATCH on Page {i+1}: PDF has '{pid}' (0x in DOCX), whereas DOCX has {near}!")
+                        bbox_s = _lookup_bbox_str_for_token(p_words, pid)
+                        print(f"         !! PDF-vs-DOCX ID MISMATCH on Page {i+1}: PDF has '{pid}'{bbox_s} (0x in DOCX), whereas DOCX has {near}!")
             # 2. Check for baked-in spelling typos in >=6-letter words inside the PDF
             pdf_words = set(re.findall(r"\b[a-zA-Z]{6,}\b", clean))
             for pw in sorted(pdf_words):
@@ -752,7 +1071,36 @@ def print_pdf_page_text_map(pdf_path, compare_txt_path=None):
                         and not (pw_low + "s" == mw or mw + "s" == pw_low or pw_low + "ed" == mw or mw + "ed" == pw_low)
                     ]
                     if near_w:
-                        print(f"         !! SUSPECTED IN-FIGURE TYPO on Page {i+1}: PDF text has '{pw}' (0x in DOCX; compare DOCX '{near_w[0]}')")
+                        bbox_s = _lookup_bbox_str_for_token(p_words, pw)
+                        print(f"         !! SUSPECTED IN-FIGURE TYPO on Page {i+1}: PDF text has '{pw}'{bbox_s} (0x in DOCX; compare DOCX '{near_w[0]}')")
+            # 3. Per-figure legend vs in-figure fluorescent reporter / tag label cross-check (e.g. Fig S3 has 'mNG' in figure vs 'mGL' in legend)
+            page_fig_id = None
+            for lbl in labels:
+                m_fid = re.search(r"(?:Figure|Fig\.?)\s*((?:EV|ED|S)?\d+)", lbl, re.I)
+                if m_fid:
+                    page_fig_id = m_fid.group(1).upper()
+                    if re.search(r"Supplementary|Supplemental", lbl, re.I) and not page_fig_id.startswith("S"):
+                        page_fig_id = "S" + page_fig_id
+                    break
+            if not page_fig_id:
+                pdf_base_low = os.path.basename(pdf_path).lower()
+                if "supp" in pdf_base_low and f"S{i+1}" in fig_legends_by_id:
+                    page_fig_id = f"S{i+1}"
+                elif "main" in pdf_base_low and f"{i+1}" in fig_legends_by_id:
+                    page_fig_id = f"{i+1}"
+            if page_fig_id and page_fig_id in fig_legends_by_id:
+                leg_blob = " ".join(fig_legends_by_id[page_fig_id])
+                page_reps = [rt for rt in _REPORTER_TOKS if re.search(r"\b" + re.escape(rt) + r"\b", clean)]
+                leg_reps = [rt for rt in _REPORTER_TOKS if re.search(r"\b" + re.escape(rt) + r"\b", leg_blob)]
+                if page_reps and leg_reps:
+                    for pr in page_reps:
+                        if pr not in leg_reps and not any(pr.lower() in lr.lower() or lr.lower() in pr.lower() for lr in leg_reps):
+                            bbox_s = _lookup_bbox_str_for_token(p_words, pr)
+                            print(
+                                f"         !! [FIGURE-VS-LEGEND REPORTER MISMATCH] Page {i+1} (Figure {page_fig_id}): "
+                                f"figure text layer contains '{pr}'{bbox_s}, whereas the Figure {page_fig_id} legend "
+                                f"only mentions {leg_reps}!"
+                            )
 
 
 def _is_video_file(path):
@@ -760,36 +1108,40 @@ def _is_video_file(path):
 
 
 def _probe_video_pure_python(vpath):
-    """Best-effort pure-Python container metadata parser for MP4/MOV and AVI when ffprobe is absent."""
-    width, height, duration, codec, has_audio = 0, 0, 0.0, "unknown", False
+    """Best-effort pure-Python container metadata parser for MP4/MOV and AVI when ffprobe is absent.
+    Returns `(width, height, duration, codec, has_audio, total_frames, fps)`."""
+    width, height, duration, codec, has_audio, total_frames, fps = 0, 0, 0.0, "unknown", False, 0, 0.0
     try:
+        fsize = os.path.getsize(vpath)
         with open(vpath, "rb") as f:
-            head = f.read(2 * 1024 * 1024)
-            f.seek(0, os.SEEK_END)
-            fsize = f.tell()
-            tail = b""
-            if fsize > len(head):
-                f.seek(max(0, fsize - 2 * 1024 * 1024))
-                tail = f.read()
-        blob = head + tail
+            if fsize <= 32 * 1024 * 1024:
+                blob = f.read()
+            else:
+                head = f.read(4 * 1024 * 1024)
+                f.seek(max(0, fsize - 4 * 1024 * 1024))
+                blob = head + f.read()
         # AVI container ('RIFF....AVI ')
-        if head[:4] == b"RIFF" and head[8:12] == b"AVI ":
+        if blob[:4] == b"RIFF" and blob[8:12] == b"AVI ":
             codec = "avi"
             idx = blob.find(b"avih")
             if idx != -1 and idx + 48 <= len(blob):
-                usec_per_frame, _, _, _, total_frames, _, _, _, w, h = struct.unpack("<10I", blob[idx + 8:idx + 48])
+                usec_per_frame, _, _, _, n_fr, _, _, _, w, h = struct.unpack("<10I", blob[idx + 8:idx + 48])
                 if w > 0 and h > 0:
                     width, height = w, h
-                if usec_per_frame > 0 and total_frames > 0:
-                    duration = (usec_per_frame * total_frames) / 1e6
+                if n_fr > 0:
+                    total_frames = n_fr
+                if usec_per_frame > 0:
+                    fps = 1e6 / float(usec_per_frame)
+                    if total_frames > 0:
+                        duration = (usec_per_frame * total_frames) / 1e6
             if b"auds" in blob:
                 has_audio = True
-            return width, height, duration, codec, has_audio
+            return width, height, duration, codec, has_audio, total_frames, fps
 
-        # MP4 / MOV container: scan for mvhd, tkhd, hdlr, and common video sample entry fourccs
-        for fourcc in (b"avc1", b"hev1", b"hvc1", b"mp4v", b"apcn", b"apch", b"jpeg", b"vp09", b"av01"):
+        # MP4 / MOV container: scan for mvhd, mdhd, stsz, tkhd, hdlr, and common video sample entry fourccs
+        for fourcc in (b"avc1", b"hev1", b"hvc1", b"mp4v", b"apcn", b"apch", b"jpeg", b"MJPG", b"png ", b"vp09", b"av01"):
             if fourcc in blob:
-                codec = fourcc.decode("ascii", errors="ignore")
+                codec = fourcc.decode("ascii", errors="ignore").strip()
                 break
         m_mvhd = blob.find(b"mvhd")
         if m_mvhd != -1 and m_mvhd + 28 <= len(blob):
@@ -802,6 +1154,27 @@ def _probe_video_pure_python(vpath):
                 timescale, dur_units = struct.unpack(">IQ", blob[m_mvhd + 24:m_mvhd + 36])
                 if timescale > 0 and dur_units < 0xFFFFFFFFFFFFFFFF:
                     duration = dur_units / float(timescale)
+        if duration == 0.0:
+            for m_md in re.finditer(rb"mdhd", blob):
+                pos = m_md.start()
+                if pos + 24 <= len(blob):
+                    ver = blob[pos + 4]
+                    if ver == 0:
+                        ts, du = struct.unpack(">II", blob[pos + 16:pos + 24])
+                        if ts > 0 and 0 < du < 0xFFFFFFFF:
+                            duration = max(duration, du / float(ts))
+                    elif ver == 1 and pos + 36 <= len(blob):
+                        ts, du = struct.unpack(">IQ", blob[pos + 24:pos + 36])
+                        if ts > 0 and 0 < du < 0xFFFFFFFFFFFFFFFF:
+                            duration = max(duration, du / float(ts))
+        for m_stsz in re.finditer(rb"stsz", blob):
+            pos = m_stsz.start()
+            if pos + 16 <= len(blob):
+                _, scnt = struct.unpack(">II", blob[pos + 8:pos + 16])
+                if 1 <= scnt <= 1000000 and scnt > total_frames:
+                    total_frames = scnt
+        if duration > 0 and total_frames > 0:
+            fps = total_frames / duration
         for m_tk in re.finditer(rb"tkhd", blob):
             pos = m_tk.start()
             if pos + 88 > len(blob):
@@ -818,43 +1191,160 @@ def _probe_video_pure_python(vpath):
             has_audio = True
     except Exception:
         pass
-    return width, height, duration, codec, has_audio
+    return width, height, duration, codec, has_audio, total_frames, fps
+
+
+def _extract_avi_frames_pure_python(vpath, outdir, stem, n_frames, duration):
+    """Extract evenly spaced frames from an uncompressed DIB or MJPEG AVI container using pure Python + PIL."""
+    Image, _, _, _ = _ensure_pil()
+    extracted = []
+    try:
+        blob = open(vpath, "rb").read()
+        if blob[:4] != b"RIFF" or blob[8:12] != b"AVI ":
+            return extracted
+        idx = blob.find(b"strf")
+        if idx == -1 or idx + 32 > len(blob):
+            return extracted
+        _, biW, biH, _, biBitCount, biComp, _ = struct.unpack("<IiiHHII", blob[idx + 8:idx + 32])
+        abs_h = abs(biH)
+        if biW <= 0 or abs_h <= 0:
+            return extracted
+        # Locate frame chunks ('00db' or '00dc')
+        frame_chunks = []
+        for m_ch in re.finditer(rb"00d[bc]", blob):
+            pos = m_ch.start()
+            if pos + 8 <= len(blob):
+                csz = struct.unpack("<I", blob[pos + 4:pos + 8])[0]
+                if csz > 100 and pos + 8 + csz <= len(blob):
+                    frame_chunks.append((pos + 8, csz))
+        if not frame_chunks:
+            return extracted
+        fracs = [i / max(1, n_frames - 1) * 0.94 for i in range(n_frames)] if n_frames > 1 else [0.0]
+        for idx_f, frac in enumerate(fracs, 1):
+            f_i = min(len(frame_chunks) - 1, int(round(frac * (len(frame_chunks) - 1))))
+            off, csz = frame_chunks[f_i]
+            raw = blob[off:off + csz]
+            ts = (duration * (f_i / max(1, len(frame_chunks) - 1))) if duration > 0 else float(f_i)
+            frame_jpg = os.path.join(outdir, f"{stem}_frame_{idx_f:02d}_{ts:.1f}s.jpg")
+            im = None
+            if biComp == 0 and biBitCount == 24 and len(raw) >= biW * abs_h * 3:
+                im = Image.frombytes("RGB", (biW, abs_h), raw[:biW * abs_h * 3], "raw", "BGR", 0, -1 if biH > 0 else 1)
+            elif biComp == 0 and biBitCount == 8 and len(raw) >= biW * abs_h:
+                im = Image.frombytes("L", (biW, abs_h), raw[:biW * abs_h], "raw", "L", 0, -1 if biH > 0 else 1).convert("RGB")
+            elif raw[:2] == b"\xff\xd8":
+                import io
+                im = Image.open(io.BytesIO(raw)).convert("RGB")
+            if im is not None:
+                im.save(frame_jpg, quality=90)
+                extracted.append((ts, frame_jpg))
+    except Exception:
+        pass
+    return extracted
 
 
 def find_text_in_pdf(pdf_path, query, units="px", ref_dpi=200.0):
-    """Locate exact bounding-box coordinates for `query` across all pages of `pdf_path`."""
-    try:
-        import fitz
-    except ImportError:
-        sys.exit("ERROR: `find-text` requires PyMuPDF (`fitz`). Use `render_figs.py render --grid` when PyMuPDF is unavailable.")
-
-    doc = fitz.open(pdf_path)
+    """Locate exact bounding-box coordinates for `query` across all pages of `pdf_path` (supports PyMuPDF or Poppler `pdftotext -bbox`)."""
+    fitz = _get_fitz()
+    sizes = get_pdf_page_sizes_pt(pdf_path)
     scale = (ref_dpi / 72.0) if units == "px" else 1.0
     print(f"=== FIND-TEXT IN PDF: '{query}' in {os.path.basename(pdf_path)} (units={units}, ref_dpi={ref_dpi:.0f}) ===")
     total_hits = 0
-    for page_idx, page in enumerate(doc):
-        rects = page.search_for(query)
-        for r in rects:
-            total_hits += 1
-            if units == "frac":
-                x0, y0 = r.x0 / page.rect.width, r.y0 / page.rect.height
-                x1, y1 = r.x1 / page.rect.width, r.y1 / page.rect.height
-                print(f"  Page {page_idx + 1}: box=[{x0:.4f}, {y0:.4f}, {x1:.4f}, {y1:.4f}]")
-            else:
-                x0, y0 = int(round(r.x0 * scale)), int(round(r.y0 * scale))
-                x1, y1 = int(round(r.x1 * scale)), int(round(r.y1 * scale))
-                print(f"  Page {page_idx + 1}: box=[{x0}, {y0}, {x1}, {y1}] (pt=[{r.x0:.1f}, {r.y0:.1f}, {r.x1:.1f}, {r.y1:.1f}])")
+
+    if fitz is not None:
+        doc = fitz.open(pdf_path)
+        for page_idx, page in enumerate(doc):
+            rects = page.search_for(query)
+            for r in rects:
+                total_hits += 1
+                if units == "frac":
+                    x0, y0 = r.x0 / page.rect.width, r.y0 / page.rect.height
+                    x1, y1 = r.x1 / page.rect.width, r.y1 / page.rect.height
+                    print(f"  Page {page_idx + 1}: box=[{x0:.4f}, {y0:.4f}, {x1:.4f}, {y1:.4f}]")
+                else:
+                    x0, y0 = int(round(r.x0 * scale)), int(round(r.y0 * scale))
+                    x1, y1 = int(round(r.x1 * scale)), int(round(r.y1 * scale))
+                    pw_px = int(round(page.rect.width * scale))
+                    ph_px = int(round(page.rect.height * scale))
+                    pad_x, pad_y = int(round(20 * scale)), int(round(14 * scale))
+                    px0, py0 = max(0, x0 - pad_x), max(0, y0 - pad_y)
+                    px1, py1 = min(pw_px, x1 + pad_x), min(ph_px, y1 + pad_y)
+                    print(
+                        f"  Page {page_idx + 1}: box=[{x0}, {y0}, {x1}, {y1}] "
+                        f"| padded_crop_box=[{px0}, {py0}, {px1}, {py1}] "
+                        f"(pt=[{r.x0:.1f}, {r.y0:.1f}, {r.x1:.1f}, {r.y1:.1f}])"
+                    )
+        if total_hits > 0:
+            return
+
+    # Fallback: Poppler `pdftotext -bbox` word/sequence matching
+    pages_words = _extract_words_with_bboxes_pt(pdf_path)
+    if not pages_words:
+        sys.exit("ERROR: `find-text` requires PyMuPDF (`fitz`) or Poppler `pdftotext`. Use `render_figs.py render --grid` instead.")
+
+    q_parts = [p.lower() for p in query.strip().split() if p.strip()]
+    for page_idx, wlist in enumerate(pages_words):
+        w_pt, h_pt = sizes[page_idx] if page_idx < len(sizes) else (612.0, 792.0)
+        pw_px, ph_px = int(round(w_pt * scale)), int(round(h_pt * scale))
+        pad_x, pad_y = int(round(20 * scale)), int(round(14 * scale))
+        if len(q_parts) == 1:
+            q_low = q_parts[0]
+            for w_s, rx0, ry0, rx1, ry1 in wlist:
+                if q_low in w_s.lower():
+                    total_hits += 1
+                    if units == "frac":
+                        print(f"  Page {page_idx + 1}: box=[{rx0/w_pt:.4f}, {ry0/h_pt:.4f}, {rx1/w_pt:.4f}, {ry1/h_pt:.4f}] ('{w_s}')")
+                    else:
+                        x0, y0 = int(round(rx0 * scale)), int(round(ry0 * scale))
+                        x1, y1 = int(round(rx1 * scale)), int(round(ry1 * scale))
+                        px0, py0 = max(0, x0 - pad_x), max(0, y0 - pad_y)
+                        px1, py1 = min(pw_px, x1 + pad_x), min(ph_px, y1 + pad_y)
+                        print(
+                            f"  Page {page_idx + 1}: box=[{x0}, {y0}, {x1}, {y1}] "
+                            f"| padded_crop_box=[{px0}, {py0}, {px1}, {py1}] "
+                            f"(pt=[{rx0:.1f}, {ry0:.1f}, {rx1:.1f}, {ry1:.1f}]) ('{w_s}')"
+                        )
+        elif len(q_parts) > 1:
+            k = len(q_parts)
+            for idx_w in range(len(wlist) - k + 1):
+                window = wlist[idx_w:idx_w + k]
+                if all(q_parts[j] in window[j][0].lower() for j in range(k)):
+                    total_hits += 1
+                    rx0 = min(w[1] for w in window)
+                    ry0 = min(w[2] for w in window)
+                    rx1 = max(w[3] for w in window)
+                    ry1 = max(w[4] for w in window)
+                    matched_s = " ".join(w[0] for w in window)
+                    if units == "frac":
+                        print(f"  Page {page_idx + 1}: box=[{rx0/w_pt:.4f}, {ry0/h_pt:.4f}, {rx1/w_pt:.4f}, {ry1/h_pt:.4f}] ('{matched_s}')")
+                    else:
+                        x0, y0 = int(round(rx0 * scale)), int(round(ry0 * scale))
+                        x1, y1 = int(round(rx1 * scale)), int(round(ry1 * scale))
+                        px0, py0 = max(0, x0 - pad_x), max(0, y0 - pad_y)
+                        px1, py1 = min(pw_px, x1 + pad_x), min(ph_px, y1 + pad_y)
+                        print(
+                            f"  Page {page_idx + 1}: box=[{x0}, {y0}, {x1}, {y1}] "
+                            f"| padded_crop_box=[{px0}, {py0}, {px1}, {py1}] "
+                            f"(pt=[{rx0:.1f}, {ry0:.1f}, {rx1:.1f}, {ry1:.1f}]) ('{matched_s}')"
+                        )
     if total_hits == 0:
-        print(f"  (No exact text-layer match found for '{query}')")
+        print(f"  (No text-layer match found for '{query}')")
 
 
-def inspect_and_storyboard_videos(target, outdir, n_frames=6):
+def inspect_and_storyboard_videos(target, outdir, n_frames=6, compare_txt_path=None):
     """Inspect video metadata (auto-extracting .zip movie archives and companion legends) and extract an N-frame storyboard per video."""
     import zipfile as _zipfile
     import xml.etree.ElementTree as _ET
     os.makedirs(outdir, exist_ok=True)
     video_files = []
-    legend_files = []
+    legend_texts_by_num = {}  # v_num_str -> list of legend strings
+
+    if not compare_txt_path and os.path.isfile("scratch_audit/manuscript_indexed.txt"):
+        compare_txt_path = "scratch_audit/manuscript_indexed.txt"
+    if compare_txt_path and os.path.isfile(compare_txt_path):
+        for ln in open(compare_txt_path, encoding="utf-8", errors="replace"):
+            m_vl = re.search(r"\b(?:Supplementary\s+|Extended\s+Data\s+)?(?:Video|Movie)\s*(?:EV|ED|S)?\s*(\d+)\b[.:–—-]\s*(.*)", ln, re.I)
+            if m_vl:
+                legend_texts_by_num.setdefault(m_vl.group(1), []).append(ln.strip())
 
     def _extract_docx_legend_to_txt(docx_p):
         txt_lines = []
@@ -894,7 +1384,7 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
                         with zf.open(member) as src, open(dst_leg, "wb") as out_f:
                             shutil.copyfileobj(src, out_f)
                         print(f"  [UNZIP LEGEND] Extracted companion file {member} -> {dst_leg}")
-                        legend_files.append(dst_leg)
+                        m_vnum = re.search(r"(?:Movie|Video|SV)[_\s-]*(?:EV|ED|S)?\s*(\d+)", base, re.I)
                         if ext_low == ".docx":
                             lines = _extract_docx_legend_to_txt(dst_leg)
                             if lines:
@@ -903,10 +1393,14 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
                                     tf.write("\n".join(lines) + "\n")
                                 for ln in lines:
                                     print(f"    Legend text ({base}): {ln}")
+                                if m_vnum:
+                                    legend_texts_by_num.setdefault(m_vnum.group(1), []).append(" ".join(lines))
                         elif ext_low in (".txt", ".md"):
                             content = open(dst_leg, encoding="utf-8", errors="replace").read().strip()
                             if content:
                                 print(f"    Legend text ({base}): {content[:300]}")
+                                if m_vnum:
+                                    legend_texts_by_num.setdefault(m_vnum.group(1), []).append(content)
         except Exception as e:
             print(f"  [WARN] Could not inspect zip archive {zpath}: {e}")
 
@@ -928,16 +1422,15 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
 
     ffmpeg = _find_binary("ffmpeg")
     ffprobe = _find_binary("ffprobe")
-    Image, ImageDraw = None, None
-    if ffmpeg:
-        Image, ImageDraw, _, _ = _ensure_pil()
+    Image, ImageDraw, _, _ = _ensure_pil()
 
     print(f"=== VIDEO METADATA & STORYBOARD EXTRACTION ({len(video_files)} file(s)) ===")
     if not ffmpeg:
         print(
             "  !! [VIDEO AUDIT GAP — NO FFMPEG]: `ffmpeg` is not installed on this host.\n"
-            "     Container dimensions/duration were inspected via pure-Python fallback, but visual\n"
-            "     storyboard frame extraction was skipped. Document this limitation in the HTML report."
+            "     Container dimensions, duration, frame count, and FPS were inspected via pure-Python fallback\n"
+            "     (and uncompressed/MJPEG AVI frames are extracted natively in Python). For H.264/MP4 files,\n"
+            "     document this host limitation in the HTML report."
         )
     for vpath in video_files:
         vname = os.path.basename(vpath)
@@ -948,6 +1441,8 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
         codec = "unknown"
         fps_str = "unknown"
         has_audio = False
+        total_frames = 0
+        fps_val = 0.0
 
         if ffprobe:
             try:
@@ -963,6 +1458,11 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
                         height = int(st.get("height", 0) or 0)
                         codec = st.get("codec_name", "unknown")
                         fps_str = st.get("r_frame_rate", "unknown")
+                        if "/" in fps_str:
+                            num, den = fps_str.split("/", 1)
+                            if float(den) > 0:
+                                fps_val = float(num) / float(den)
+                        total_frames = int(st.get("nb_frames", 0) or 0)
                         if not duration and st.get("duration"):
                             duration = float(st.get("duration", 0.0))
                     elif st.get("codec_type") == "audio":
@@ -971,30 +1471,41 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
                 print(f"  [WARN] ffprobe failed on {vname}: {e}")
 
         if width == 0 and height == 0:
-            width, height, duration, codec, has_audio = _probe_video_pure_python(vpath)
+            width, height, duration, codec, has_audio, total_frames, fps_val = _probe_video_pure_python(vpath)
+            if fps_val > 0:
+                fps_str = f"{fps_val:.2f} fps ({total_frames} frames)"
 
         print(f"\nVideo: {vname} ({fsize_mb:.2f} MB)")
-        print(f"  Resolution : {width}x{height} px | Codec: {codec} | FPS: {fps_str} | Duration: {duration:.2f}s | Audio track: {'Yes' if has_audio else 'No'}")
+        print(
+            f"  Resolution : {width}x{height} px | Codec: {codec} | FPS: {fps_str} | "
+            f"Frames: {total_frames or 'unknown'} | Duration: {duration:.2f}s | Audio track: {'Yes' if has_audio else 'No'}"
+        )
         if has_audio:
             print("  !! NOTE: Video contains an audio track — verify whether unintentional microphone/room audio is present.")
 
-        if not ffmpeg:
-            continue
+        # Print companion or manuscript video legend text (if discovered) so the reviewer can compare FPS, frame count, and duration
+        m_vn = re.search(r"(?:Movie|Video|SV)[_\s-]*(?:EV|ED|S)?\s*(\d+)", vname, re.I)
+        if m_vn and m_vn.group(1) in legend_texts_by_num:
+            for leg_s in legend_texts_by_num[m_vn.group(1)]:
+                print(f"  Legend text: {leg_s[:320]}")
 
-        fracs = [i / max(1, n_frames - 1) * 0.94 for i in range(n_frames)] if n_frames > 1 else [0.0]
         extracted_frames = []
-        for idx, frac in enumerate(fracs, 1):
-            ts = max(0.0, duration * frac) if duration > 0 else float(idx - 1)
-            frame_jpg = os.path.join(outdir, f"{stem}_frame_{idx:02d}_{ts:.1f}s.jpg")
-            try:
-                subprocess.check_call([
-                    ffmpeg, "-y", "-v", "error", "-ss", f"{ts:.2f}",
-                    "-i", vpath, "-frames:v", "1", "-q:v", "2", frame_jpg
-                ])
-                if os.path.isfile(frame_jpg):
-                    extracted_frames.append((ts, frame_jpg))
-            except Exception as e:
-                print(f"  [WARN] Frame extraction at {ts:.2f}s failed: {e}")
+        if ffmpeg:
+            fracs = [i / max(1, n_frames - 1) * 0.94 for i in range(n_frames)] if n_frames > 1 else [0.0]
+            for idx, frac in enumerate(fracs, 1):
+                ts = max(0.0, duration * frac) if duration > 0 else float(idx - 1)
+                frame_jpg = os.path.join(outdir, f"{stem}_frame_{idx:02d}_{ts:.1f}s.jpg")
+                try:
+                    subprocess.check_call([
+                        ffmpeg, "-y", "-v", "error", "-ss", f"{ts:.2f}",
+                        "-i", vpath, "-frames:v", "1", "-q:v", "2", frame_jpg
+                    ])
+                    if os.path.isfile(frame_jpg):
+                        extracted_frames.append((ts, frame_jpg))
+                except Exception as e:
+                    print(f"  [WARN] Frame extraction at {ts:.2f}s failed: {e}")
+        elif vname.lower().endswith(".avi"):
+            extracted_frames = _extract_avi_frames_pure_python(vpath, outdir, stem, n_frames, duration)
 
         if extracted_frames:
             cols = min(3, len(extracted_frames))
@@ -1004,12 +1515,25 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
             draw = ImageDraw.Draw(sheet)
             draw.text(
                 (12, 10),
-                f"{vname} — {width}x{height}px, {duration:.2f}s, codec={codec}, audio={'yes' if has_audio else 'no'}",
+                f"{vname} — {width}x{height}px, {duration:.2f}s, {fps_str}, codec={codec}, audio={'yes' if has_audio else 'no'}",
                 fill=(15, 23, 42),
             )
+            prev_gray_small = None
+            prev_ts = 0.0
+            frame_deltas = []
             for idx, (ts, fp) in enumerate(extracted_frames):
                 r, c = divmod(idx, cols)
-                im = Image.open(fp).convert("RGB")
+                im = _open_image_white_bg(fp)
+                try:
+                    g_small = im.convert("L").resize((64, 64))
+                    px_vals = list(g_small.getdata())
+                    if prev_gray_small is not None and len(px_vals) == len(prev_gray_small):
+                        mad = sum(abs(a - b) for a, b in zip(px_vals, prev_gray_small)) / float(len(px_vals))
+                        frame_deltas.append((idx, prev_ts, ts, mad))
+                    prev_gray_small = px_vals
+                    prev_ts = ts
+                except Exception:
+                    pass
                 im.thumbnail((cell_w - 20, cell_h - 36))
                 x = c * cell_w + 10
                 y = 36 + r * cell_h + 26
@@ -1019,10 +1543,117 @@ def inspect_and_storyboard_videos(target, outdir, n_frames=6):
             sb_path = os.path.join(outdir, f"{stem}_storyboard.jpg")
             sheet.save(sb_path, quality=90)
             print(f"  Storyboard : {sb_path} ({len(extracted_frames)} frames sampled)")
+            if len(frame_deltas) >= 3:
+                sorted_mads = sorted(d[3] for d in frame_deltas)
+                med_mad = max(1.5, sorted_mads[len(sorted_mads) // 2])
+                for f_idx, ts0, ts1, mad in frame_deltas:
+                    if mad > max(18.0, 2.8 * med_mad):
+                        print(
+                            f"  !! [ABRUPT VIDEO FRAME TRANSITION / SCENE CUT] Frame #{f_idx-1} ({ts0:.2f}s) -> "
+                            f"Frame #{f_idx} ({ts1:.2f}s) shows an abrupt visual jump (mean pixel delta={mad:.1f} vs "
+                            f"median {med_mad:.1f}) — inspect storyboard for spliced scenes, mid-movie contrast shifts, or dropped frames!"
+                        )
 
 
 def opt(name, default=None):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+
+def _opt_all(name):
+    out = []
+    args = sys.argv[1:]
+    for idx, a in enumerate(args):
+        if a == name and idx + 1 < len(args):
+            out.append(args[idx + 1])
+    return out
+
+
+def _validate_crop_content(cropped_im, out_path, x0, y0, x1, y1):
+    """Warn immediately if a saved crop is blank/near-blank (<0.5% non-white pixels) or clips dark ink along borders."""
+    try:
+        small = cropped_im.convert("RGB")
+        if small.width > 240 or small.height > 240:
+            small = small.resize((min(240, small.width), min(240, small.height)))
+        pxs = list(small.getdata())
+        if not pxs:
+            return
+        non_white = sum(1 for r, g, b in pxs if r < 245 or g < 245 or b < 245)
+        nw_frac = non_white / float(len(pxs))
+        if nw_frac < 0.005:
+            print(
+                f"  !! [BLANK / NEAR-BLANK CROP WARNING] {out_path} is {100.0 * (1.0 - nw_frac):.1f}% empty/white! "
+                f"Coordinates ({x0:g},{y0:g},{x1:g},{y1:g}) missed the figure panel. "
+                f"Re-locate with `render_figs.py find-text` or `render --grid` and re-crop!"
+            )
+            return
+        # Check if dark text/ink (<165 luminance) touches outer 1px borders extensively
+        w_s, h_s = small.width, small.height
+        if w_s >= 20 and h_s >= 20:
+            def _is_dark(rgb):
+                return (rgb[0] + rgb[1] + rgb[2]) < 495
+            top_dark = sum(1 for x in range(w_s) if _is_dark(pxs[x])) / float(w_s)
+            bot_dark = sum(1 for x in range(w_s) if _is_dark(pxs[(h_s - 1) * w_s + x])) / float(w_s)
+            left_dark = sum(1 for y in range(h_s) if _is_dark(pxs[y * w_s])) / float(h_s)
+            right_dark = sum(1 for y in range(h_s) if _is_dark(pxs[y * w_s + (w_s - 1)])) / float(h_s)
+            clipped = []
+            if top_dark > 0.18:
+                clipped.append("top")
+            if bot_dark > 0.18:
+                clipped.append("bottom")
+            if left_dark > 0.18:
+                clipped.append("left")
+            if right_dark > 0.18:
+                clipped.append("right")
+            if clipped and len(clipped) <= 3:
+                print(
+                    f"  [NOTE: Crop border check] {out_path} has dark pixels along {', '.join(clipped)} edge(s) — "
+                    f"verify that panel headers or axis labels are not clipped (pass `--pad 15` to add padding)."
+                )
+    except Exception:
+        pass
+
+
+def _perform_single_crop(im, w_pt, h_pt, x0, y0, x1, y1, dpi, units, ref_dpi, out_path, page_1idx, explicit_units=False, pad_px=0):
+    eff_units = units
+    if not explicit_units and units == "pt" and (x1 > w_pt * 1.05 or y1 > h_pt * 1.05):
+        eff_units = "px"
+        print(
+            f"  [AUTO-DETECTED units=px @ {ref_dpi:.0f} dpi because coordinates ({x0:g},{y0:g},{x1:g},{y1:g}) "
+            f"exceed page pt bounds ({w_pt:.0f}x{h_pt:.0f} pt)]"
+        )
+    if eff_units == 'pt':
+        scale_x = im.width / w_pt
+        scale_y = im.height / h_pt
+    elif eff_units == 'px':
+        scale_x = dpi / ref_dpi
+        scale_y = dpi / ref_dpi
+    elif eff_units == 'frac':
+        scale_x = im.width
+        scale_y = im.height
+    else:
+        sys.exit(f"Unknown --units '{eff_units}' (use pt, px, or frac)")
+
+    pad_render = int(round(pad_px * (dpi / ref_dpi))) if pad_px > 0 else 0
+    box = (
+        max(0, int(round(x0 * scale_x)) - pad_render),
+        max(0, int(round(y0 * scale_y)) - pad_render),
+        min(im.width, int(round(x1 * scale_x)) + pad_render),
+        min(im.height, int(round(y1 * scale_y)) + pad_render),
+    )
+    if box[2] <= box[0] or box[3] <= box[1]:
+        sys.exit(
+            f"ERROR: Invalid/out-of-bounds crop box ({x0:g}, {y0:g}, {x1:g}, {y1:g}) with units={eff_units} "
+            f"on page {page_1idx} ({w_pt:.0f}x{h_pt:.0f} pt | @200dpi={int(round(w_pt*200/72))}x{int(round(h_pt*200/72))} px). "
+            f"Did you mean `--units px`?"
+        )
+    cropped = im.crop(box)
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    if out_path.lower().endswith(('.jpg', '.jpeg')):
+        cropped.save(out_path, format="JPEG", quality=90, optimize=True)
+    else:
+        cropped.save(out_path)
+    print(f"{out_path}: {cropped.width}x{cropped.height} px (cropped from page {page_1idx} @ {dpi} dpi, units={eff_units})")
+    _validate_crop_content(cropped, out_path, x0, y0, x1, y1)
 
 
 def main():
@@ -1045,7 +1676,6 @@ def main():
 
     if cmd in ('wrap-images', 'images-to-pdf'):
         dpi = float(opt('--dpi', 200))
-        # Strip optional flags from positional args
         pos_args = []
         skip_next = False
         for a in sys.argv[2:]:
@@ -1075,8 +1705,9 @@ def main():
 
     if cmd in ('page-text', 'text-map'):
         pdf = sys.argv[2]
-        cmp_txt = opt('--compare-text', None)
-        print_pdf_page_text_map(pdf, compare_txt_path=cmp_txt)
+        cmp_txt = opt('--compare-text', None) or opt('--manuscript-txt', None)
+        extras = _opt_all('--extra-txt')
+        print_pdf_page_text_map(pdf, compare_txt_path=cmp_txt, extra_txt_paths=extras)
         return
 
     if cmd in ('find-text', 'search-text'):
@@ -1088,12 +1719,13 @@ def main():
         find_text_in_pdf(pdf, query, units=units, ref_dpi=ref_dpi)
         return
 
-    if cmd in ('video', 'videos'):
+    if cmd in ('video', 'videos', 'extract-frames'):
         if len(sys.argv) < 4:
-            sys.exit("Usage: render_figs.py video VIDEO_OR_DIR OUTDIR [--frames 6]")
+            sys.exit("Usage: render_figs.py video VIDEO_OR_DIR OUTDIR [--frames 6] [--compare-text manuscript_indexed.txt]")
         target, outdir = sys.argv[2], sys.argv[3]
         n_frames = int(opt('--frames', 6))
-        inspect_and_storyboard_videos(target, outdir, n_frames=n_frames)
+        cmp_txt = opt('--compare-text', None) or opt('--manuscript-txt', None)
+        inspect_and_storyboard_videos(target, outdir, n_frames=n_frames, compare_txt_path=cmp_txt)
         return
 
     if cmd == 'render':
@@ -1122,41 +1754,106 @@ def main():
     if cmd == 'crop':
         pdf = sys.argv[2]
         page_1idx = int(sys.argv[3])
-        x0, y0, x1, y1 = map(float, sys.argv[4:8])
         dpi = int(opt('--dpi', 400))
+        pad_px = int(opt('--pad', 0))
+        explicit_units = '--units' in sys.argv
         units = opt('--units', 'pt')
         ref_dpi = float(opt('--ref-dpi', 200))
-        out = opt('--out', 'crop.jpg')
+        out = opt('--out', None)
+        if ',' in sys.argv[4]:
+            arg4 = sys.argv[4]
+            if ':' in arg4:
+                coords_s, out_inline = arg4.split(':', 1)
+                if not out:
+                    out = out_inline
+            else:
+                coords_s = arg4
+            x0, y0, x1, y1 = map(float, coords_s.split(','))
+            if not out:
+                if len(sys.argv) >= 6 and not sys.argv[5].startswith('-'):
+                    out = sys.argv[5]
+                else:
+                    out = 'crop.jpg'
+        else:
+            x0, y0, x1, y1 = map(float, sys.argv[4:8])
+            if not out:
+                if len(sys.argv) >= 9 and not sys.argv[8].startswith('-'):
+                    out = sys.argv[8]
+                else:
+                    out = 'crop.jpg'
 
         sizes = get_pdf_page_sizes_pt(pdf)
         w_pt, h_pt = sizes[page_1idx - 1]
         im = render_page_to_pil(pdf, page_1idx, dpi)
+        _perform_single_crop(im, w_pt, h_pt, x0, y0, x1, y1, dpi, units, ref_dpi, out, page_1idx, explicit_units=explicit_units, pad_px=pad_px)
+        return
 
-        if units == 'pt':
-            scale_x = im.width / w_pt
-            scale_y = im.height / h_pt
-        elif units == 'px':
-            scale_x = dpi / ref_dpi
-            scale_y = dpi / ref_dpi
-        elif units == 'frac':
-            scale_x = im.width
-            scale_y = im.height
-        else:
-            sys.exit(f"Unknown --units '{units}' (use pt, px, or frac)")
+    if cmd == 'batch-crop':
+        dpi = int(opt('--dpi', 400))
+        pad_px = int(opt('--pad', 0))
+        explicit_units = '--units' in sys.argv
+        units = opt('--units', 'px')
+        ref_dpi = float(opt('--ref-dpi', 200))
+        if sys.argv[2].lower().endswith('.json') and os.path.isfile(sys.argv[2]):
+            specs = json.load(open(sys.argv[2], encoding='utf-8'))
+            # Group by (pdf, page, dpi) so each page is rendered only once
+            grouped = {}
+            for sp in specs:
+                k = (sp['pdf'], int(sp.get('page', 1)), int(sp.get('dpi', dpi)))
+                grouped.setdefault(k, []).append(sp)
+            for (pdf_p, pg_i, r_dpi), items in grouped.items():
+                sizes = get_pdf_page_sizes_pt(pdf_p)
+                w_pt, h_pt = sizes[pg_i - 1]
+                im = render_page_to_pil(pdf_p, pg_i, r_dpi)
+                for sp in items:
+                    bx = sp['box']
+                    u = sp.get('units', units)
+                    rf = float(sp.get('ref_dpi', ref_dpi))
+                    sp_pad = int(sp.get('pad', pad_px))
+                    _perform_single_crop(im, w_pt, h_pt, float(bx[0]), float(bx[1]), float(bx[2]), float(bx[3]), r_dpi, u, rf, sp['out'], pg_i, explicit_units=('units' in sp or explicit_units), pad_px=sp_pad)
+            return
+        # CLI forms supported:
+        # 1) Single-page: render_figs.py batch-crop FILE.pdf PAGE X0,Y0,X1,Y1:OUT1.jpg [X0,Y0,X1,Y1:OUT2.jpg ...]
+        # 2) Multi-page inline: render_figs.py batch-crop FILE.pdf PAGE1@X0,Y0,X1,Y1:OUT1.jpg PAGE2@X0,Y0,X1,Y1:OUT2.jpg ...
+        pdf = sys.argv[2]
+        sizes = get_pdf_page_sizes_pt(pdf)
+        default_page = None
+        start_idx = 3
+        if re.fullmatch(r"\d+", sys.argv[3]):
+            default_page = int(sys.argv[3])
+            start_idx = 4
 
-        box = (
-            max(0, int(round(x0 * scale_x))),
-            max(0, int(round(y0 * scale_y))),
-            min(im.width, int(round(x1 * scale_x))),
-            min(im.height, int(round(y1 * scale_y))),
-        )
-        cropped = im.crop(box)
-        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
-        if out.lower().endswith(('.jpg', '.jpeg')):
-            cropped.save(out, format="JPEG", quality=90, optimize=True)
-        else:
-            cropped.save(out)
-        print(f"{out}: {cropped.width}x{cropped.height} px (cropped from page {page_1idx} @ {dpi} dpi, units={units})")
+        # Group specs by page so each page is rendered at most once
+        by_page_specs = {}
+        skip_next = False
+        for a in sys.argv[start_idx:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if a in ('--dpi', '--units', '--ref-dpi', '--pad'):
+                skip_next = True
+                continue
+            if re.fullmatch(r"\d+", a):
+                default_page = int(a)
+                continue
+            if ':' in a:
+                left_s, out_p = a.split(':', 1)
+                if '@' in left_s:
+                    pg_s, coords_s = left_s.split('@', 1)
+                    pg_i = int(pg_s)
+                else:
+                    if default_page is None:
+                        sys.exit("ERROR: Specify page number either as `batch-crop FILE.pdf PAGE X0,Y0,X1,Y1:OUT.jpg` or `PAGE@X0,Y0,X1,Y1:OUT.jpg`.")
+                    pg_i = default_page
+                    coords_s = left_s
+                x0, y0, x1, y1 = map(float, coords_s.split(','))
+                by_page_specs.setdefault(pg_i, []).append((x0, y0, x1, y1, out_p))
+
+        for pg_i, items in by_page_specs.items():
+            w_pt, h_pt = sizes[pg_i - 1]
+            im = render_page_to_pil(pdf, pg_i, dpi)
+            for x0, y0, x1, y1, out_p in items:
+                _perform_single_crop(im, w_pt, h_pt, x0, y0, x1, y1, dpi, units, ref_dpi, out_p, pg_i, explicit_units=explicit_units, pad_px=pad_px)
         return
 
     if cmd == 'contact-sheet':
@@ -1176,7 +1873,7 @@ def main():
         draw = ImageDraw.Draw(sheet)
         for idx, fname in enumerate(files):
             r, c = divmod(idx, cols)
-            im = Image.open(os.path.join(crops_dir, fname)).convert("RGB")
+            im = _open_image_white_bg(os.path.join(crops_dir, fname))
             orig_w, orig_h = im.size
             im.thumbnail((cell_w - 24, cell_h - 42))
             x = c * cell_w + 12
@@ -1191,8 +1888,8 @@ def main():
     if cmd == 'compare':
         Image, ImageDraw, ImageFont, _ = _ensure_pil()
         img1_path, img2_path, out_path = sys.argv[2], sys.argv[3], sys.argv[4]
-        im1 = Image.open(img1_path).convert("RGB")
-        im2 = Image.open(img2_path).convert("RGB")
+        im1 = _open_image_white_bg(img1_path)
+        im2 = _open_image_white_bg(img2_path)
         label1 = opt('--label1', os.path.basename(img1_path))
         label2 = opt('--label2', os.path.basename(img2_path))
         box1 = opt('--box1')
@@ -1225,6 +1922,47 @@ def main():
 
         canvas.save(out_path, quality=92)
         print(f"Saved side-by-side comparison to {out_path} ({canvas.width}x{canvas.height} px)")
+        return
+
+    if cmd == 'pdf-to-indexed-txt':
+        pdf_path = sys.argv[2]
+        out_txt = opt('--out')
+        pages = extract_pdf_page_texts(pdf_path)
+        paras = [f"# MANUSCRIPT-AUDIT EXTRACT | file={os.path.basename(pdf_path)} | path={os.path.abspath(pdf_path)}"]
+        p_idx = 0
+        start_new_re = re.compile(
+            r'^(?:(?:Supplementary|Supplemental|Expanded\s+View|Extended\s+Data)\s+(?:Figure|Fig\.?|Table|Note|Methods?|Text|Video|Movie|References?)|'
+            r'(?:Figure|Fig\.?|Table)\s+[A-Za-z0-9]+|(?:\[[sS]?\d{1,3}\]|\([sS]?\d{1,3}\)|[sS]?\d{1,3}[.)])\s+[A-Z])',
+            re.I,
+        )
+        for pg_no, pg_txt in enumerate(pages, 1):
+            cur_buf = []
+            for raw_ln in pg_txt.splitlines():
+                ln = raw_ln.strip()
+                if not ln or re.match(r'^(?:page\s+)?\d+\s*(?:of\s+\d+)?$', ln, re.I):
+                    if cur_buf:
+                        p_idx += 1
+                        paras.append(f"[P{p_idx}] " + " ".join(cur_buf))
+                        cur_buf = []
+                    continue
+                if cur_buf and (start_new_re.match(ln) or (len(cur_buf[-1]) < 55 and not cur_buf[-1].endswith(('.', ',', ';', ':')))):
+                    p_idx += 1
+                    paras.append(f"[P{p_idx}] " + " ".join(cur_buf))
+                    cur_buf = [ln]
+                else:
+                    if cur_buf and cur_buf[-1].endswith('-') and ln and ln[0].islower():
+                        cur_buf[-1] = cur_buf[-1][:-1] + ln
+                    else:
+                        cur_buf.append(ln)
+            if cur_buf:
+                p_idx += 1
+                paras.append(f"[P{p_idx}] " + " ".join(cur_buf))
+        full_out = "\n".join(paras) + "\n"
+        if out_txt:
+            with open(out_txt, "w", encoding="utf-8") as f:
+                f.write(full_out)
+        else:
+            sys.stdout.write(full_out)
         return
 
     sys.exit(__doc__)

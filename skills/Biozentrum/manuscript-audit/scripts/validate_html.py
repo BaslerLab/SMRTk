@@ -97,7 +97,7 @@ def main():
         ok = False
         print(f"  img[{i}]: {why}")
 
-    ph = re.findall(r'\{\{[A-Z_]+[:.][^}]*\}\}', h)
+    ph = re.findall(r'\{\{[A-Z_]+[:.][^}]*\}\}|<<REPLACE:[^>]*>>|&lt;&lt;REPLACE:[^&]*&gt;&gt;', h)
     if ph:
         ok = False
         print("LEFTOVER PLACEHOLDERS:", ph[:5])

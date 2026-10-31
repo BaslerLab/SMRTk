@@ -10,10 +10,12 @@ Usage:
   docx2txt.py FILE.docx --audit-format            # report Word line-numbering settings, empty-line offsets,
                                                   # font-size anomalies, and estimated line numbers per paragraph
   docx2txt.py FILE.docx --extract-refs [OUT.txt]  # extract the numbered References section to OUT.txt (or stdout)
+  docx2txt.py FILE.docx --extract-csl [OUT.json]  # extract embedded Zotero/Mendeley/EndNote CSL-JSON metadata
 """
 import sys
 import os
 import re
+import json
 import shutil
 import zipfile
 import hashlib
@@ -35,6 +37,20 @@ def omml_to_text(node):
     tag = node.tag
     if tag == f"{{{NS['m']}}}t":
         return node.text or ''
+    if tag == f"{{{NS['m']}}}d":
+        d_pr = node.find(f"{{{NS['m']}}}dPr")
+        beg_chr = '('
+        end_chr = ')'
+        if d_pr is not None:
+            bc = d_pr.find(f"{{{NS['m']}}}begChr")
+            ec = d_pr.find(f"{{{NS['m']}}}endChr")
+            if bc is not None and bc.get(f"{{{NS['m']}}}val") is not None:
+                beg_chr = bc.get(f"{{{NS['m']}}}val")
+            if ec is not None and ec.get(f"{{{NS['m']}}}val") is not None:
+                end_chr = ec.get(f"{{{NS['m']}}}val")
+        e_nodes = node.findall(f"{{{NS['m']}}}e")
+        inner = ', '.join(omml_to_text(e) for e in e_nodes)
+        return f"{beg_chr}{inner}{end_chr}"
     if tag == f"{{{NS['m']}}}f":
         num = node.find(f"{{{NS['m']}}}num")
         den = node.find(f"{{{NS['m']}}}den")
@@ -67,6 +83,8 @@ def para_text(p, rid2target, split_br=False):
     def _walk(elem):
         for node in elem:
             tag = node.tag
+            if tag == f"{{{NS['w']}}}del":
+                continue
             if tag == f"{{{NS['m']}}}oMath":
                 eq_txt = omml_to_text(node).strip()
                 if eq_txt:
@@ -133,21 +151,204 @@ def iter_body_blocks(container):
             yield from iter_body_blocks(child)
 
 
+def iter_table_rows(container):
+    """Yield <w:tr> elements in document order, unwrapping <w:sdt>/<w:sdtContent> and <w:customXml>."""
+    tr_tag = f"{{{NS['w']}}}tr"
+    sdt_tag = f"{{{NS['w']}}}sdt"
+    sdt_content_tag = f"{{{NS['w']}}}sdtContent"
+    custom_xml_tag = f"{{{NS['w']}}}customXml"
+    for child in container:
+        if child.tag == tr_tag:
+            yield child
+        elif child.tag == sdt_tag:
+            sc = child.find(sdt_content_tag)
+            if sc is not None:
+                yield from iter_table_rows(sc)
+        elif child.tag in (sdt_content_tag, custom_xml_tag):
+            yield from iter_table_rows(child)
+
+
+def iter_row_cells(container):
+    """Yield <w:tc> elements in document order, unwrapping <w:sdt>/<w:sdtContent> and <w:customXml>."""
+    tc_tag = f"{{{NS['w']}}}tc"
+    sdt_tag = f"{{{NS['w']}}}sdt"
+    sdt_content_tag = f"{{{NS['w']}}}sdtContent"
+    custom_xml_tag = f"{{{NS['w']}}}customXml"
+    for child in container:
+        if child.tag == tc_tag:
+            yield child
+        elif child.tag == sdt_tag:
+            sc = child.find(sdt_content_tag)
+            if sc is not None:
+                yield from iter_row_cells(sc)
+        elif child.tag in (sdt_content_tag, custom_xml_tag):
+            yield from iter_row_cells(child)
+
+
+_IMG_ONLY_RE = re.compile(r'^(?:\[\[IMAGE:[^\]]+\]\]\s*)+$')
+
+
 def extract_table_rows(tbl, rid2target):
-    """Extract rows from a <w:tbl> element as lists of cell strings."""
+    """Extract rows from a <w:tbl> element as lists of cell strings (unwrapping <w:sdt>-wrapped rows/cells).
+    Also inspects <w:tcPr> for <w:gridSpan> and <w:vMerge> so merged cells are explicitly annotated
+    (e.g. '[colspan=2] Header' or '[vmerge-cont]'), preventing false 'shifted column header' accusations.
+    """
+    w_ns = NS['w']
     rows = []
-    for tr in tbl.findall(f"{{{NS['w']}}}tr"):
+    for tr in iter_table_rows(tbl):
         cells = []
-        for tc in tr.findall(f"{{{NS['w']}}}tc"):
+        for tc in iter_row_cells(tr):
+            span_prefix = ""
+            tcPr = tc.find(f"{{{w_ns}}}tcPr")
+            if tcPr is not None:
+                gs = tcPr.find(f"{{{w_ns}}}gridSpan")
+                if gs is not None:
+                    val = gs.get(f"{{{w_ns}}}val", "1")
+                    try:
+                        if int(val) > 1:
+                            span_prefix += f"[colspan={val}] "
+                    except ValueError:
+                        pass
+                vm = tcPr.find(f"{{{w_ns}}}vMerge")
+                if vm is not None:
+                    vm_val = vm.get(f"{{{w_ns}}}val", "")
+                    if vm_val != "restart":
+                        span_prefix += "[vmerge-cont] "
             cell_paras = [
                 para_text(p, rid2target).strip()
                 for p in iter_body_blocks(tc)
-                if p.tag == f"{{{NS['w']}}}p"
+                if p.tag == f"{{{w_ns}}}p"
             ]
-            cells.append(' / '.join(cp for cp in cell_paras if cp))
+            non_empty = [cp for cp in cell_paras if cp]
+            if not non_empty:
+                cells.append(span_prefix.strip())
+            else:
+                merged = [non_empty[0]]
+                for cp in non_empty[1:]:
+                    # Join image-only paragraphs to the following caption with a space instead of ' / '
+                    if _IMG_ONLY_RE.match(merged[-1]):
+                        merged[-1] = merged[-1] + ' ' + cp
+                    else:
+                        merged.append(cp)
+                cells.append(span_prefix + (' / '.join(merged)))
         if any(cells):
             rows.append(cells)
     return rows
+
+
+def extract_embedded_csl_json(z):
+    """Extract embedded CSL-JSON citation records from Mendeley WebExtensions and Zotero/Mendeley w:instrText fields.
+
+    Returns (csl_items_list, stats_dict) where stats_dict has keys:
+      zotero_fields, mendeley_webext_citations, mendeley_fields, endnote_fields,
+      unique_items, items_with_doi, items_with_abstract
+    """
+    stats = {
+        'zotero_fields': 0,
+        'mendeley_webext_citations': 0,
+        'mendeley_fields': 0,
+        'endnote_fields': 0,
+        'unique_items': 0,
+        'items_with_doi': 0,
+        'items_with_abstract': 0,
+    }
+    items = []
+    seen_keys = set()
+
+    def _add_item(item_data, source_tag):
+        if not isinstance(item_data, dict):
+            return
+        title = re.sub(r'\s+', ' ', str(item_data.get('title', '')).strip())
+        doi = str(item_data.get('DOI', '')).strip()
+        iid = str(item_data.get('id', '')).strip()
+        if not title and not doi:
+            return
+        dedup_key = (doi.lower() if doi else '', title.lower()[:120] if title else iid)
+        if dedup_key in seen_keys:
+            return
+        seen_keys.add(dedup_key)
+        rec = dict(item_data)
+        rec['_source'] = source_tag
+        items.append(rec)
+
+    # 1. Check Mendeley Cite WebExtension XMLs (word/webextensions/webextension*.xml)
+    for name in sorted(z.namelist()):
+        if 'webextension' in name.lower() and name.lower().endswith('.xml'):
+            try:
+                we_root = ET.fromstring(z.read(name))
+            except Exception:
+                continue
+            for elem in we_root.iter():
+                prop_name = elem.get('name', '')
+                if 'MENDELEY_CITATIONS' in prop_name.upper() and prop_name.upper() == 'MENDELEY_CITATIONS':
+                    val = elem.get('value', '')
+                    if not val:
+                        continue
+                    try:
+                        parsed = json.loads(val)
+                        if isinstance(parsed, str):
+                            parsed = json.loads(parsed)
+                        if isinstance(parsed, list):
+                            stats['mendeley_webext_citations'] += len(parsed)
+                            for cite_obj in parsed:
+                                if isinstance(cite_obj, dict):
+                                    for ci in cite_obj.get('citationItems', []):
+                                        if isinstance(ci, dict) and 'itemData' in ci:
+                                            _add_item(ci['itemData'], 'mendeley_webextension')
+                    except Exception:
+                        pass
+
+    # 2. Check word/document.xml field instructions (<w:instrText> grouped by <w:fldChar>)
+    try:
+        doc_root = ET.fromstring(z.read('word/document.xml'))
+    except Exception:
+        doc_root = None
+
+    if doc_root is not None:
+        fields = []
+        cur = []
+        in_fld = False
+        for elem in doc_root.iter():
+            if elem.tag == f"{{{NS['w']}}}fldChar":
+                ftype = elem.get(f"{{{NS['w']}}}fldCharType")
+                if ftype == 'begin':
+                    in_fld = True
+                    cur = []
+                elif ftype in ('separate', 'end') and in_fld:
+                    if cur:
+                        fields.append(''.join(cur))
+                    cur = []
+                    if ftype == 'end':
+                        in_fld = False
+            elif elem.tag == f"{{{NS['w']}}}instrText":
+                if in_fld:
+                    cur.append(elem.text or '')
+                else:
+                    fields.append(elem.text or '')
+
+        for f_str in fields:
+            fu = f_str.upper()
+            if 'ZOTERO' in fu or 'CSL_CITATION' in fu:
+                stats['zotero_fields'] += 1
+            if 'EN.CITE' in fu or 'ENDNOTE' in fu:
+                stats['endnote_fields'] += 1
+            if 'MENDELEY' in fu:
+                stats['mendeley_fields'] += 1
+            idx = f_str.find('CSL_CITATION')
+            if idx != -1:
+                j_str = f_str[idx + len('CSL_CITATION'):].strip()
+                try:
+                    d = json.loads(j_str)
+                    for ci in d.get('citationItems', []):
+                        if isinstance(ci, dict) and 'itemData' in ci:
+                            _add_item(ci['itemData'], 'csl_citation_field')
+                except Exception:
+                    pass
+
+    stats['unique_items'] = len(items)
+    stats['items_with_doi'] = sum(1 for it in items if str(it.get('DOI', '')).strip())
+    stats['items_with_abstract'] = sum(1 for it in items if str(it.get('abstract', '')).strip())
+    return items, stats
 
 
 def audit_formatting(z, body, rid2target):
@@ -168,25 +369,29 @@ def audit_formatting(z, body, rid2target):
 
     sdt_nodes = body.findall(f".//{{{NS['w']}}}sdt")
     sdt_paras = sum(len(s.findall(f".//{{{NS['w']}}}p")) for s in sdt_nodes)
-    instr_texts = [n.text or "" for n in body.findall(f".//{{{NS['w']}}}instrText")]
-    zotero_fields = sum(1 for t in instr_texts if "ZOTERO" in t.upper() or "CSL_CITATION" in t.upper())
-    endnote_fields = sum(1 for t in instr_texts if "EN.CITE" in t.upper() or "ENDNOTE" in t.upper())
-    mendeley_fields = sum(1 for t in instr_texts if "MENDELEY" in t.upper())
-    if sdt_nodes or zotero_fields or endnote_fields or mendeley_fields:
+    csl_items, cite_stats = extract_embedded_csl_json(z)
+    zotero_fields = cite_stats['zotero_fields']
+    endnote_fields = cite_stats['endnote_fields']
+    mendeley_fields = cite_stats['mendeley_fields']
+    mendeley_webext = cite_stats['mendeley_webext_citations']
+    if sdt_nodes or zotero_fields or endnote_fields or mendeley_fields or mendeley_webext:
         print(
             f"Structured Document Tags (<w:sdt>): {len(sdt_nodes)} control(s) wrapping {sdt_paras} paragraph(s) "
             f"(extracted automatically by docx2txt.py)."
         )
-        if zotero_fields or endnote_fields or mendeley_fields:
+        if zotero_fields or endnote_fields or mendeley_fields or mendeley_webext:
             print(
-                f"  !! PRODUCTION NOTE: Active citation-manager fields detected "
-                f"(Zotero={zotero_fields}, EndNote={endnote_fields}, Mendeley={mendeley_fields}). "
+                f"  !! PRODUCTION NOTE: Active citation-manager metadata detected "
+                f"(Zotero/CSL fields={zotero_fields}, Mendeley WebExtension citations={mendeley_webext}, "
+                f"Mendeley fields={mendeley_fields}, EndNote={endnote_fields}). "
+                f"Embedded CSL-JSON records: {cite_stats['unique_items']} unique items "
+                f"({cite_stats['items_with_doi']} with DOI, {cite_stats['items_with_abstract']} with full abstract). "
                 f"Consider unformatting citations to plain text before final journal submission if required by the journal pipeline."
             )
         elif sdt_paras > 0:
             print(
                 f"  !! PRODUCTION NOTE: {sdt_paras} paragraph(s) live inside <w:sdt> content controls "
-                f"(e.g., Zotero/Word bibliography controls). Consider converting content controls to static text before submission."
+                f"(e.g., Zotero/Mendeley/Word bibliography controls). Consider converting content controls to static text before submission."
             )
 
     br_nodes = body.findall(f".//{{{NS['w']}}}br")
@@ -200,6 +405,16 @@ def audit_formatting(z, body, rid2target):
     para_records = []
     p_idx = 0
     empty_unsuppressed = []
+    merged_headings = []
+    split_paragraphs = []
+
+    merged_hdr_re = re.compile(
+        r'([a-z\)\]]\s*(?:\[\d+(?:[,–\-]\d+)*\])?\s*\.+\s*(?:\[\d+(?:[,–\-]\d+)*\])?\s*\.*)'
+        r'\s*(\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z0-9\s,\-–/()]{2,60})$'
+    )
+    stray_dot_hdr_re = re.compile(
+        r'^\.+(\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z0-9\s,\-–/()]{2,60})$'
+    )
 
     default_sz = "document-default"
     try:
@@ -222,9 +437,27 @@ def audit_formatting(z, body, rid2target):
                         all_sizes[f"{s} pt"] += 1
                 else:
                     all_sizes[default_sz] += 1
+                m_mh = merged_hdr_re.search(txt)
+                if m_mh:
+                    merged_headings.append((p_idx, m_mh.group(1), m_mh.group(2)))
+                elif stray_dot_hdr_re.match(txt) and len(txt) < 95:
+                    merged_headings.append((p_idx, '.', stray_dot_hdr_re.match(txt).group(1)))
             if not txt and not sup:
                 empty_unsuppressed.append(p_idx)
             para_records.append((p_idx, txt, sup, sizes))
+
+    # Check for paragraphs accidentally split mid-sentence by a hard return
+    non_empty_paras = [(pid, txt) for pid, txt, _, _ in para_records if txt]
+    for i in range(len(non_empty_paras) - 1):
+        pid1, txt1 = non_empty_paras[i]
+        pid2, txt2 = non_empty_paras[i + 1]
+        if len(txt1) >= 40 and len(txt2) >= 25:
+            if (
+                re.search(r'\b(?:of|in|to|for|with|and|or|by|from|that|which|the|a|an|as|at|on|into|between|within|during|under|over|through|[a-z]{4,})\s*$', txt1)
+                and not re.search(r'[.!?:;)\]]\s*$', txt1)
+                and re.match(r'^[a-z]{2,}\b', txt2)
+            ):
+                split_paragraphs.append((pid1, pid2, txt1[-45:], txt2[:45]))
 
     dominant_size = all_sizes.most_common(1)[0][0] if all_sizes else default_sz
     print(f"Total top-level paragraphs: {p_idx}")
@@ -234,6 +467,48 @@ def audit_formatting(z, body, rid2target):
         print("  !! NOTE: Empty paragraphs without line-number suppression are counted by Word's continuous")
         print("     line numbering, shifting downstream line numbers by up to +"
               f"{len(empty_unsuppressed)} lines depending on where they appear.")
+
+    if merged_headings:
+        for pid, pre_end, hdr_txt in merged_headings:
+            print(f"  !! MERGED SECTION HEADING in [P{pid}]: missing paragraph break before '{hdr_txt}' (after '...{pre_end}')")
+
+    if split_paragraphs:
+        for pid1, pid2, tail1, head2 in split_paragraphs:
+            print(f"  !! ACCIDENTAL MID-SENTENCE PARAGRAPH SPLIT between [P{pid1}] and [P{pid2}]: '...{tail1}' -> '{head2}...'")
+
+    # Non-standard Greek / mathematical look-alike symbol scan (e.g. U+03D0 ϐ for β, U+03D2 ϒ for γ, U+2206 ∆ for Δ)
+    lookalike_map = {
+        '\u03d0': ('ϐ', 'U+03D0 GREEK BETA SYMBOL', 'β (U+03B2)'),
+        '\u03d1': ('ϑ', 'U+03D1 GREEK THETA SYMBOL', 'θ (U+03B8)'),
+        '\u03d2': ('ϒ', 'U+03D2 GREEK UPSILON WITH HOOK SYMBOL', 'γ (U+03B3) or υ (U+03C5)'),
+        '\u03f0': ('ϰ', 'U+03F0 GREEK KAPPA SYMBOL', 'κ (U+03BA)'),
+        '\u03f1': ('ϱ', 'U+03F1 GREEK RHO SYMBOL', 'ρ (U+03C1)'),
+        '\u03f5': ('ϵ', 'U+03F5 GREEK LUNATE EPSILON SYMBOL', 'ε (U+03B5)'),
+        '\u2206': ('∆', 'U+2206 INCREMENT OPERATOR', 'Δ (U+0394 GREEK CAPITAL LETTER DELTA)'),
+        '\ufb01': ('ﬁ', 'U+FB01 LATIN SMALL LIGATURE FI', 'fi'),
+        '\ufb02': ('ﬂ', 'U+FB02 LATIN SMALL LIGATURE FL', 'fl'),
+    }
+    lookalike_hits = {}
+    for pid, txt, _, _ in para_records:
+        if not txt:
+            continue
+        for ch, (glyph, name, std_repl) in lookalike_map.items():
+            if ch in txt:
+                # Extract up to 3 example words containing the character
+                words = [w.strip('.,;:()[]') for w in txt.split() if ch in w][:3]
+                lookalike_hits.setdefault(ch, []).append((pid, words))
+    if lookalike_hits:
+        print("\n  !! NON-STANDARD UNICODE / GREEK LOOK-ALIKE CHARACTERS DETECTED:")
+        for ch, occs in lookalike_hits.items():
+            glyph, name, std_repl = lookalike_map[ch]
+            pids = [f"[P{p}]" for p, _ in occs[:12]]
+            ex_words = []
+            for _, ws in occs:
+                for w in ws:
+                    if w not in ex_words:
+                        ex_words.append(w)
+            print(f"     - '{glyph}' ({name}) instead of standard {std_repl} in {len(occs)} paragraph(s) "
+                  f"({', '.join(pids)}{'...' if len(occs) > 12 else ''}); examples: {', '.join(ex_words[:5])}")
 
     if len(all_sizes) > 1:
         print(f"Paragraph font-size distribution: {dict(all_sizes)}")
@@ -292,21 +567,23 @@ def audit_formatting(z, body, rid2target):
 
 
 def extract_references_section(body, rid2target):
-    """Locate the References/Bibliography section and return clean numbered reference entries."""
+    """Locate the References/Bibliography section(s) (including Supplementary References) and return numbered entries."""
     ref_hdr_re = re.compile(
-        r'^\s*(?:references|references\s+and\s+notes|literature\s+cited|bibliography|works\s+cited)\s*:?\s*$',
+        r'^\s*(?:(?:\d+(?:\.\d+)*\.?\s+)?(?:supplementary\s+|supporting\s+|si\s+)?'
+        r'(?:references|references\s+and\s+notes|literature\s+cited|bibliography|works\s+cited))\s*:?\s*$',
         re.I
     )
     end_hdr_re = re.compile(
         r'^\s*(?:acknowledg(?:e)?ments?|author\s+contributions?|competing\s+(?:financial\s+)?interests?|'
         r'declaration\s+of\s+interests?|conflicts?\s+of\s+interest|funding|data\s+(?:and\s+code\s+)?availability|'
-        r'figure\s+legends?|main\s+figure\s+legends?|tables?|supplementary\s+(?:information|materials?|figures?|tables?)|'
+        r'figure\s+legends?|main\s+figure\s+legends?|tables?|supplementary\s+(?:information|materials?|figures?|tables?|notes?|methods?|text)|'
         r'extended\s+data|star\s*[\s★*]?\s*methods|materials?\s+and\s+methods|experimental\s+procedures)\s*:?\s*$',
         re.I
     )
-    num_lead_re = re.compile(r'^\s*(?:\[(\d+)\]|(\d+)[\.\)]|\((\d+)\))\s+(.*\S)\s*$')
+    num_lead_re = re.compile(r'^\s*(?:\[(S?\d+)\]|(S?\d+)[\.\)]|\((S?\d+)\))\s+(.*\S)\s*$', re.I)
 
     in_refs = False
+    is_supp_section = False
     extracted = []
     auto_num = 0
     p_idx = 0
@@ -319,31 +596,47 @@ def extract_references_section(body, rid2target):
         if not t:
             continue
 
-        if not in_refs:
-            if ref_hdr_re.match(t):
-                in_refs = True
+        if ref_hdr_re.match(t):
+            in_refs = True
+            is_supp_section = bool(re.search(r'\b(?:supplementary|supporting|si)\b', t, re.I))
+            auto_num = 0
             continue
 
-        # Stop if we hit a post-References section heading
-        if end_hdr_re.match(t) and len(extracted) >= 3:
-            break
+        if not in_refs:
+            continue
+
+        # Stop current references block if we hit a post-References section heading (but keep scanning for Supplementary References)
+        if end_hdr_re.match(t) and len(extracted) >= 1:
+            in_refs = False
+            continue
         if len(t) < 65 and not num_lead_re.match(t) and extracted and not re.search(r'\b(?:19|20)\d{2}\b|doi|et\s+al', t, re.I):
-            # Likely a new section header after references
             if re.match(r'^[A-Z][A-Za-z0-9\s,\-–—/()]{2,55}$', t):
-                break
+                in_refs = False
+                continue
 
         m = num_lead_re.match(t)
         if m:
-            num = int(m.group(1) or m.group(2) or m.group(3))
+            raw_id = (m.group(1) or m.group(2) or m.group(3)).upper()
             rest = m.group(4).strip()
-            auto_num = num
+            if raw_id.startswith('S'):
+                num = raw_id
+                try:
+                    auto_num = int(raw_id[1:])
+                except ValueError:
+                    pass
+            else:
+                num = int(raw_id)
+                auto_num = num
+                if is_supp_section and any(str(x[1]) == str(num) for x in extracted):
+                    num = f"S{num}"
             extracted.append((p_idx, num, rest))
         else:
             # Check if Word auto-numbering (<w:numPr>) is present or if it looks like an unnumbered bibliography entry
             has_numpr = child.find(f".//{{{NS['w']}}}numPr") is not None
             if has_numpr or re.search(r'\b(?:19|20)\d{2}[a-z]?\b', t):
                 auto_num += 1
-                extracted.append((p_idx, auto_num, t))
+                num_label = f"S{auto_num}" if (is_supp_section and any(x[1] == auto_num for x in extracted)) else auto_num
+                extracted.append((p_idx, num_label, t))
             elif extracted:
                 # Continuation paragraph of previous reference
                 prev_pid, prev_num, prev_txt = extracted[-1]
@@ -353,26 +646,56 @@ def extract_references_section(body, rid2target):
 
 
 def main():
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help') or '--help' in sys.argv:
         sys.exit(__doc__)
 
-    path = sys.argv[1]
     indexed = '--indexed' in sys.argv
     want_media = '--media' in sys.argv
     want_audit = '--audit-format' in sys.argv
     want_refs = '--extract-refs' in sys.argv
+    want_csl = '--extract-csl' in sys.argv
+
+    consumed_indices = {0}
+    for flag in ('--indexed', '--media', '--audit-format', '--extract-refs', '--extract-csl', '--outdir'):
+        if flag in sys.argv:
+            f_idx = sys.argv.index(flag)
+            consumed_indices.add(f_idx)
+            if flag in ('--extract-refs', '--extract-csl', '--outdir', '--media'):
+                if f_idx + 1 < len(sys.argv) and not sys.argv[f_idx + 1].startswith('-'):
+                    # Only consume next arg as flag value if it is not the input .docx file
+                    if not sys.argv[f_idx + 1].lower().endswith('.docx'):
+                        consumed_indices.add(f_idx + 1)
+
+    pos_args = [arg for idx_a, arg in enumerate(sys.argv) if idx_a not in consumed_indices and not arg.startswith('-')]
+    if not pos_args:
+        sys.exit(__doc__)
+    path = pos_args[0]
+    pos_outfile = pos_args[1] if len(pos_args) >= 2 else None
+
     refs_out = None
     if want_refs:
         r_idx = sys.argv.index('--extract-refs')
-        if r_idx + 1 < len(sys.argv) and not sys.argv[r_idx + 1].startswith('-'):
+        if r_idx + 1 < len(sys.argv) and not sys.argv[r_idx + 1].startswith('-') and sys.argv[r_idx + 1] != path:
             refs_out = sys.argv[r_idx + 1]
+    csl_out = None
+    if want_csl:
+        c_idx = sys.argv.index('--extract-csl')
+        if c_idx + 1 < len(sys.argv) and not sys.argv[c_idx + 1].startswith('-') and sys.argv[c_idx + 1] != path:
+            csl_out = sys.argv[c_idx + 1]
     outdir = 'docx_media'
     if '--outdir' in sys.argv:
         outdir = sys.argv[sys.argv.index('--outdir') + 1]
     elif want_media:
         m_idx = sys.argv.index('--media')
-        if m_idx + 1 < len(sys.argv) and not sys.argv[m_idx + 1].startswith('-'):
+        if m_idx + 1 < len(sys.argv) and not sys.argv[m_idx + 1].startswith('-') and sys.argv[m_idx + 1] != path:
             outdir = sys.argv[m_idx + 1]
+
+    out_fh = None
+    orig_stdout = sys.stdout
+    if pos_outfile and not (want_refs or want_csl):
+        os.makedirs(os.path.dirname(os.path.abspath(pos_outfile)), exist_ok=True)
+        out_fh = open(pos_outfile, 'w', encoding='utf-8')
+        sys.stdout = out_fh
 
     z = zipfile.ZipFile(path)
     rid2target = {}
@@ -384,6 +707,24 @@ def main():
         pass
 
     body = ET.fromstring(z.read('word/document.xml')).find(f"{{{NS['w']}}}body")
+
+    if want_csl:
+        csl_items, cite_stats = extract_embedded_csl_json(z)
+        payload = json.dumps({'stats': cite_stats, 'items': csl_items}, indent=2, ensure_ascii=False)
+        if csl_out:
+            os.makedirs(os.path.dirname(os.path.abspath(csl_out)), exist_ok=True)
+            with open(csl_out, 'w', encoding='utf-8') as f:
+                f.write(payload + '\n')
+            print(
+                f"# extracted {len(csl_items)} embedded CSL items "
+                f"({cite_stats['items_with_doi']} DOIs, {cite_stats['items_with_abstract']} abstracts) to {csl_out}",
+                file=sys.stderr,
+            )
+        else:
+            print(payload)
+            return
+        if not (indexed or want_audit or want_refs):
+            return
 
     if want_refs:
         refs = extract_references_section(body, rid2target)
@@ -421,7 +762,10 @@ def main():
             with open(path, 'rb') as bf:
                 sha_prefix = hashlib.sha256(bf.read()).hexdigest()[:16]
             fsize = os.path.getsize(path)
-            print(f"# MANUSCRIPT-AUDIT EXTRACT | file={os.path.basename(path)} | sha256={sha_prefix} | bytes={fsize}")
+            print(
+                f"# MANUSCRIPT-AUDIT EXTRACT | file={os.path.basename(path)} "
+                f"| path={os.path.abspath(path)} | sha256={sha_prefix} | bytes={fsize}"
+            )
         except OSError:
             pass
 
@@ -465,6 +809,10 @@ def main():
                 n += 1
                 print(f"# media[{n}]: {dst} ({os.path.getsize(dst)} bytes)", file=sys.stderr)
         print(f"# extracted {n} media files to {outdir}/", file=sys.stderr)
+
+    if out_fh is not None:
+        sys.stdout = orig_stdout
+        out_fh.close()
 
 
 if __name__ == '__main__':

@@ -15,7 +15,7 @@ Prevents false completion claims by verifying on disk that:
 Zero external dependencies (uses Python 3 standard library only).
 
 Usage:
-  verify_deliverables.py --dir . [--source-text scratch_audit/manuscript_indexed.txt] [--no-counterpart Cover_letter.docx]
+  verify_deliverables.py --dir . [--original-dir ../Original] [--source-text scratch_audit/manuscript_indexed.txt] [--no-counterpart Cover_letter.docx]
   verify_deliverables.py --html MANUSCRIPT_AUDIT_REPORT.html --docx Main_AUDITED.docx --pdf Figs_AUDITED.pdf [--source-text indexed.txt]
 """
 import sys
@@ -142,11 +142,22 @@ def main():
         sys.exit(__doc__)
 
     dirs = collect_flag_values("--dir")
+    orig_dirs = collect_flag_values("--original-dir")
     html_files = collect_flag_values("--html")
     docx_files = collect_flag_values("--docx")
     pdf_files = collect_flag_values("--pdf")
     source_texts = collect_flag_values("--source-text")
     no_counterpart = {os.path.basename(x).lower() for x in collect_flag_values("--no-counterpart")}
+    no_figs_in_pkg = "--no-figures-in-package" in sys.argv
+    skip_ws_scan = "--skip-workspace-scan" in sys.argv
+
+    # Always infer workspace directory `d` even when `--dir` is omitted (e.g. when `--html` / `--docx` are passed)
+    # so missing counterpart deliverables (e.g. Rebuttal_Letter_AUDITED.docx or Figure_EV3_AUDITED.pdf) are still caught!
+    if not dirs and not skip_ws_scan:
+        ref_file = (html_files or docx_files or pdf_files or [None])[0]
+        inferred_d = os.path.dirname(os.path.abspath(ref_file)) if ref_file else os.path.abspath(".")
+        if os.path.isdir(inferred_d):
+            dirs = [inferred_d]
 
     missing_counterparts = []
     provenance_warnings = []
@@ -158,7 +169,11 @@ def main():
             html_cands = [
                 os.path.join(d, fn)
                 for fn in all_dir_files
-                if fn.lower().startswith("manuscript_audit_report") and fn.lower().endswith(".html")
+                if fn.lower().endswith(".html") and (
+                    fn.lower().startswith("manuscript_audit_report")
+                    or "audit" in fn.lower()
+                    or "report" in fn.lower()
+                )
             ]
             if html_cands:
                 # If multiple versioned reports exist, pick the most recently modified one
@@ -200,6 +215,17 @@ def main():
             if os.path.isfile(os.path.join(d, fn)) and fn.lower().endswith(".pdf") and "_audited" in fn.lower()
         ]
 
+        # Determine source directory for counterpart parity checking (--original-dir, or d if d has source files, or ../Original)
+        src_check_dir = orig_dirs[0] if orig_dirs else d
+        has_un_audited_in_d = any(
+            fn.lower().endswith((".docx", ".pdf")) and "_audited" not in fn.lower() and not fn.startswith("~$")
+            for fn in all_dir_files
+        )
+        if not orig_dirs and not has_un_audited_in_d:
+            sib_orig = os.path.join(os.path.dirname(os.path.abspath(d)), "Original")
+            if os.path.isdir(sib_orig):
+                src_check_dir = sib_orig
+
         for fn in all_dir_files:
             full = os.path.join(d, fn)
             if not os.path.isfile(full):
@@ -208,24 +234,68 @@ def main():
             if low.endswith(".docx") and "_audited" in low:
                 if not explicit_docx and full not in docx_files:
                     docx_files.append(full)
-            elif low.endswith(".docx") and not fn.startswith("~$"):
-                if low in no_counterpart:
-                    continue
-                stem_low = os.path.splitext(low)[0]
-                matching_aud = [
-                    p for p in audited_docx_in_dir
-                    if os.path.basename(p).lower().startswith(stem_low + "_audited")
-                ]
-                if not matching_aud:
-                    expected_name = os.path.splitext(fn)[0] + "_AUDITED.docx"
-                    missing_counterparts.append((fn, expected_name))
-                elif not explicit_docx:
-                    for mp in matching_aud:
-                        if mp not in docx_files:
-                            docx_files.append(mp)
             elif low.endswith(".pdf") and "_audited" in low:
                 if not explicit_pdf and full not in pdf_files:
                     pdf_files.append(full)
+
+        def _norm_stem(s):
+            return re.sub(r"[\s_-]+", "_", s.lower()).strip("_")
+
+        if os.path.isdir(src_check_dir):
+            for fn in sorted(os.listdir(src_check_dir)):
+                full = os.path.join(src_check_dir, fn)
+                if not os.path.isfile(full) or fn.startswith("~$"):
+                    continue
+                low = fn.lower()
+                if "_audited" in low or low in no_counterpart:
+                    continue
+                if low.endswith(".docx"):
+                    stem_norm = _norm_stem(os.path.splitext(low)[0])
+                    matching_aud = [
+                        p for p in audited_docx_in_dir
+                        if _norm_stem(os.path.splitext(os.path.basename(p))[0]).startswith(stem_norm + "_audited")
+                    ]
+                    if not matching_aud:
+                        expected_name = os.path.splitext(fn)[0] + "_AUDITED.docx"
+                        missing_counterparts.append(("Audited DOCX", fn, expected_name))
+                    elif not explicit_docx:
+                        for mp in matching_aud:
+                            if mp not in docx_files:
+                                docx_files.append(mp)
+                elif low.endswith(".pdf") and not no_figs_in_pkg:
+                    # Skip non-figure checklist/summary PDFs unless they were explicitly annotated
+                    if any(k in low for k in ("reporting_summary", "checklist", "wrapped_figures", "guideline", "certificate")):
+                        continue
+                    stem_norm = _norm_stem(os.path.splitext(low)[0])
+                    matching_aud_pdf = [
+                        p for p in audited_pdf_in_dir
+                        if _norm_stem(os.path.splitext(os.path.basename(p))[0]).startswith(stem_norm + "_audited")
+                    ]
+                    if not matching_aud_pdf:
+                        expected_pdf = os.path.splitext(fn)[0] + "_AUDITED.pdf"
+                        missing_counterparts.append(("Audited PDF", fn, expected_pdf))
+                    elif not explicit_pdf:
+                        for mp in matching_aud_pdf:
+                            if mp not in pdf_files:
+                                pdf_files.append(mp)
+
+        # Cross-check report_spec.json for Rebuttal / Cover findings that lack an *_AUDITED.docx counterpart
+        spec_cand = os.path.join(scratch_dir, "report_spec.json")
+        if os.path.isfile(spec_cand):
+            try:
+                import json as _json
+                spec_txt = open(spec_cand, encoding="utf-8", errors="replace").read()
+                n_reb_q = len(re.findall(r'"quote_para"\s*:\s*"(?:Rebuttal|Reb|Response):', spec_txt, re.I))
+                if n_reb_q > 0 and not any(
+                    any(k in os.path.basename(p).lower() for k in ("rebuttal", "response", "reviewer", "point"))
+                    for p in audited_docx_in_dir
+                ):
+                    provenance_warnings.append(
+                        f"MISSING REBUTTAL DELIVERABLE: report_spec.json contains {n_reb_q} 'Rebuttal:P#' finding(s), "
+                        f"but no Rebuttal *_AUDITED.docx exists on disk!"
+                    )
+            except Exception:
+                pass
 
     rows = []
     all_passed = True
@@ -248,9 +318,9 @@ def main():
         if not ok:
             all_passed = False
 
-    for src_fn, exp_fn in missing_counterparts:
+    for dtype_c, src_fn, exp_fn in missing_counterparts:
         rows.append(
-            ("Audited DOCX", exp_fn, "FAIL", f"MISSING COUNTERPART for '{src_fn}' (pass --no-counterpart {src_fn} if intentionally unedited)")
+            (dtype_c, exp_fn, "FAIL", f"MISSING COUNTERPART for '{src_fn}' (pass --no-counterpart {src_fn} if intentionally unedited)")
         )
         all_passed = False
 

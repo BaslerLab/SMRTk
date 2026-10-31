@@ -26,29 +26,26 @@ import base64
 
 TEMPLATE_JSON = {
     "title": "Pre-Submission / Resubmission Manuscript Audit Report",
-    "subtitle": "Manuscript Title Here",
-    "mode": "Resubmission Mode (or First Submission Mode)",
+    "subtitle": "<<REPLACE: Manuscript Title>>",
+    "mode": "<<REPLACE: Resubmission Mode or First Submission Mode>>",
     "files_audited": [
-        "Text.docx (Main Manuscript, Tables & Legends)",
-        "Main-figure.pdf (Figures 1–7)",
-        "Supplementary-figure.pdf (Figures S1–S5)",
-        "Rebuttal_comments.docx (Point-by-Point Reviewer Response)"
+        "<<REPLACE: List actual manuscript .docx, .pdf, .xlsx, and video files audited>>"
     ],
     "summary_table": [
         {
             "area": "1. Bibliography & In-Text Citations",
             "status": "ISSUES FOUND",
-            "summary": "Brief summary of reference/citation issues found."
+            "summary": "<<REPLACE: Brief summary of reference/citation issues found.>>"
         },
         {
             "area": "2. Figure, Table, Video & Methods Callouts",
             "status": "ISSUES FOUND",
-            "summary": "Brief summary of callout order, missing callouts, or orphan Methods."
+            "summary": "<<REPLACE: Brief summary of callout order, missing callouts, or orphan Methods.>>"
         },
         {
             "area": "3. Figure Legends vs. Visual Content & Quantitative Data",
             "status": "CRITICAL ISSUES",
-            "summary": "Brief summary of figure/graph/scale-bar/sample-size findings."
+            "summary": "<<REPLACE: Brief summary of figure/graph/scale-bar/sample-size findings.>>"
         }
     ],
     "sections": [
@@ -61,12 +58,12 @@ TEMPLATE_JSON = {
                     "id": "F1.1",
                     "severity": "CRITICAL",
                     "category": "Mismatched Citation",
-                    "title": "Short title of the finding",
+                    "title": "<<REPLACE: Short title of the finding>>",
                     "location": "Main Text [P13], Introduction",
                     "quote_para": "P13",
                     "verbatim_quote": "",
-                    "issue": "Detailed explanation of the discrepancy.",
-                    "fix": "Exact drop-in replacement text or action required.",
+                    "issue": "<<REPLACE: Detailed explanation of the discrepancy.>>",
+                    "fix": "<<REPLACE: Exact drop-in replacement text or action required.>>",
                     "images": []
                 }
             ]
@@ -80,19 +77,18 @@ TEMPLATE_JSON = {
                     "id": "F2.1",
                     "severity": "CRITICAL",
                     "category": "Data / Bar Graph Swap",
-                    "title": "Example figure finding with embedded cropped image",
+                    "title": "<<REPLACE: Example figure finding with embedded cropped image>>",
                     "location": "Figure 5C & Main Text [P38]",
                     "quote_para": "P38",
-                    "issue": "Explanation of visual/quantitative discrepancy.",
-                    "fix": "Concrete instruction to fix the figure and/or legend.",
+                    "issue": "<<REPLACE: Explanation of visual/quantitative discrepancy.>>",
+                    "fix": "<<REPLACE: Concrete instruction to fix the figure and/or legend.>>",
                     "images": []
                 }
             ]
         }
     ],
     "verified_items": [
-        "All figure numbers (1–7, S1–S5) and panel letters match between PDFs and legends.",
-        "Dilution and concentration calculations in Materials & Methods verified."
+        "<<REPLACE: List verified and consistent items across the manuscript>>"
     ]
 }
 
@@ -169,6 +165,7 @@ section.audit-sec h2 {
 .finding-card[data-sev="MAJOR"]    { border-left-color: var(--maj-bd); }
 .finding-card[data-sev="MODERATE"] { border-left-color: var(--mod-bd); }
 .finding-card[data-sev="MINOR"]    { border-left-color: var(--min-bd); }
+.finding-card[data-sev="VERIFIED"] { border-left-color: var(--ok-bd); }
 .f-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 8px; }
 .badge {
   display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 0.75rem; font-weight: 700;
@@ -178,6 +175,7 @@ section.audit-sec h2 {
 .badge.MAJOR    { background: var(--maj-bg);  color: var(--maj-tx);  border: 1px solid var(--maj-bd); }
 .badge.MODERATE { background: var(--mod-bg);  color: var(--mod-tx);  border: 1px solid var(--mod-bd); }
 .badge.MINOR    { background: var(--min-bg);  color: var(--min-tx);  border: 1px solid var(--min-bd); }
+.badge.VERIFIED { background: var(--ok-bg);   color: var(--ok-tx);   border: 1px solid var(--ok-bd); }
 .f-title { font-weight: 700; font-size: 1.05rem; }
 .f-loc { margin-left: auto; font-size: 0.83rem; color: var(--muted); font-family: monospace; }
 blockquote.verbatim {
@@ -249,8 +247,13 @@ def load_indexed_paragraphs(txt_path):
                         seen_parent_sub.add(parent_p)
                 elif key.startswith("Row") and cur_tbl:
                     rnum = key.split()[1]
-                    paras.setdefault(f"{cur_tbl}.R{rnum}", val)
-                    paras.setdefault(cur_tbl, val)
+                    for rk in (f"{cur_tbl}.R{rnum}", f"{cur_tbl}R{rnum}", f"{cur_tbl}:R{rnum}", f"TABLE {cur_tbl[1:]} R{rnum}"):
+                        paras.setdefault(rk, val)
+                    for tk in (cur_tbl, f"TABLE {cur_tbl[1:]}"):
+                        if tk not in paras:
+                            paras[tk] = val
+                        elif len(paras[tk]) < 600:
+                            paras[tk] += " | " + val
     return paras
 
 
@@ -331,13 +334,15 @@ def normalize_finding(f, idx_fallback=""):
     )
 
     raw_imgs = f.get("images") or ([] if not f.get("image") else [f.get("image")])
+    if not raw_imgs and f.get("img"):
+        raw_imgs = [{"path": f.get("img"), "caption": f.get("img_caption") or f.get("caption") or ""}]
     norm_imgs = []
     for im in raw_imgs:
         if isinstance(im, str) and im.strip():
-            norm_imgs.append({"path": im.strip(), "caption": ""})
+            norm_imgs.append({"path": im.strip(), "caption": str(f.get("img_caption") or "")})
         elif isinstance(im, dict):
-            p = im.get("path") or im.get("src") or im.get("file") or ""
-            c = im.get("caption") or im.get("label") or im.get("title") or ""
+            p = im.get("path") or im.get("src") or im.get("file") or im.get("img") or ""
+            c = im.get("caption") or im.get("img_caption") or im.get("label") or im.get("title") or ""
             if p:
                 norm_imgs.append({"path": p, "caption": c})
     out["images"] = norm_imgs
@@ -402,6 +407,50 @@ def opt(name, default=None):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
+def _opt_all(name):
+    out = []
+    args = sys.argv[1:]
+    for idx, a in enumerate(args):
+        if a == name and idx + 1 < len(args):
+            out.append(args[idx + 1])
+    return out
+
+
+def load_extra_para_maps(cover_txt=None, extra_txts=None):
+    """Load prefix -> paragraph dict map for `Cover:P3`, `Supp:P12`, etc."""
+    prefix_map = {}
+    if not cover_txt:
+        for cand in ("scratch_audit/cover_indexed.txt", "cover_indexed.txt"):
+            if os.path.isfile(cand):
+                cover_txt = cand
+                break
+    if cover_txt and os.path.isfile(cover_txt):
+        prefix_map["cover"] = load_indexed_paragraphs(cover_txt)
+        prefix_map["cover_letter"] = prefix_map["cover"]
+
+    # Auto-discover supplementary and companion *_indexed.txt files in scratch_audit/
+    if os.path.isdir("scratch_audit"):
+        for fn in sorted(os.listdir("scratch_audit")):
+            if fn.endswith("_indexed.txt") and fn not in ("manuscript_indexed.txt", "rebuttal_indexed.txt", "cover_indexed.txt"):
+                full_p = os.path.join("scratch_audit", fn)
+                stem = re.sub(r"_indexed\.txt$", "", fn.lower())
+                pmap = load_indexed_paragraphs(full_p)
+                prefix_map.setdefault(stem, pmap)
+                if stem.startswith("supp"):
+                    prefix_map.setdefault("supp", pmap)
+                    prefix_map.setdefault("supplementary", pmap)
+
+    for item in (extra_txts or []):
+        if "=" in item:
+            pfx, path = item.split("=", 1)
+            if os.path.isfile(path):
+                prefix_map[pfx.strip().lower()] = load_indexed_paragraphs(path)
+        elif os.path.isfile(item):
+            stem = re.sub(r"_indexed$", "", os.path.splitext(os.path.basename(item))[0].lower())
+            prefix_map[stem] = load_indexed_paragraphs(item)
+    return prefix_map
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         sys.exit(__doc__)
@@ -422,7 +471,7 @@ def main():
             if skip_next:
                 skip_next = False
                 continue
-            if a in ("--spec", "--out", "--manuscript-txt", "--rebuttal-txt"):
+            if a in ("--spec", "--out", "--manuscript-txt", "--rebuttal-txt", "--cover-txt", "--extra-txt"):
                 skip_next = True
                 continue
             if a.startswith("-"):
@@ -435,8 +484,16 @@ def main():
     if not spec_path or not out_html:
         sys.exit(__doc__)
 
-    ms_paras = load_indexed_paragraphs(opt("--manuscript-txt"))
-    reb_paras = load_indexed_paragraphs(opt("--rebuttal-txt"))
+    ms_txt_p = opt("--manuscript-txt")
+    if not ms_txt_p and os.path.isfile("scratch_audit/manuscript_indexed.txt"):
+        ms_txt_p = "scratch_audit/manuscript_indexed.txt"
+    reb_txt_p = opt("--rebuttal-txt")
+    if not reb_txt_p and os.path.isfile("scratch_audit/rebuttal_indexed.txt"):
+        reb_txt_p = "scratch_audit/rebuttal_indexed.txt"
+
+    ms_paras = load_indexed_paragraphs(ms_txt_p)
+    reb_paras = load_indexed_paragraphs(reb_txt_p)
+    extra_para_maps = load_extra_para_maps(opt("--cover-txt"), _opt_all("--extra-txt"))
 
     raw_spec = json.load(open(spec_path, encoding="utf-8"))
     spec = normalize_report_spec(raw_spec)
@@ -558,9 +615,16 @@ def main():
             quote_text = f.get("verbatim_quote", "").strip()
             qpara = f.get("quote_para", "").strip()
             if qpara and not quote_text:
-                if qpara.lower().startswith("rebuttal:"):
-                    pid = qpara.split(":", 1)[1].strip()
-                    quote_text = reb_paras.get(pid, "")
+                if ":" in qpara:
+                    pfx, pid = qpara.split(":", 1)
+                    pfx_low = pfx.strip().lower()
+                    pid = pid.strip()
+                    if pfx_low in ("rebuttal", "reb", "response"):
+                        quote_text = reb_paras.get(pid, "")
+                    elif pfx_low in extra_para_maps:
+                        quote_text = extra_para_maps[pfx_low].get(pid, "")
+                    else:
+                        quote_text = ms_paras.get(pid, "")
                 else:
                     quote_text = ms_paras.get(qpara, "")
 

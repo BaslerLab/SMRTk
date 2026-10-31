@@ -29,7 +29,7 @@ import zipfile
 from datetime import datetime, timezone
 import xml.etree.ElementTree as ET
 
-# 1-to-1 character translation table so smart quotes, dashes, NBSP, Δ/∆, and µ/μ match seamlessly
+# 1-to-1 character translation table so smart quotes, dashes, NBSP, Δ/∆, µ/μ, and Greek look-alikes match seamlessly
 _TYPO_MAP = str.maketrans({
     "\u2018": "'", "\u2019": "'", "\u201b": "'", "\u2032": "'", "\u02bc": "'",
     "\u201c": '"', "\u201d": '"', "\u201f": '"', "\u2033": '"',
@@ -37,20 +37,43 @@ _TYPO_MAP = str.maketrans({
     "\u2013": "-", "\u2014": "-", "\u2212": "-", "\u2011": "-", "\u2010": "-",
     "\u2206": "\u0394",
     "\u00b5": "\u03bc",
+    "\u03d0": "\u03b2",  # ϐ (curled beta) -> β
+    "\u03d1": "\u03b8",  # ϑ (theta symbol) -> θ
+    "\u03d2": "\u03b3",  # ϒ (hooked upsilon, often misused for γ) -> γ
+    "\u03f0": "\u03ba",  # ϰ (kappa symbol) -> κ
+    "\u03f1": "\u03c1",  # ϱ (rho symbol) -> ρ
+    "\u03f5": "\u03b5",  # ϵ (lunate epsilon) -> ε
 })
+
+_LOOKALIKE_SYMBOL_CHARS = frozenset("\u03d0\u03d1\u03d2\u03f0\u03f1\u03f5\u2206\u00b5")
 
 
 def norm_typo(s):
-    """Length-preserving (1-char-to-1-char) normalization of quotes, dashes, spaces, Δ, and μ."""
+    """Length-preserving (1-char-to-1-char) normalization of quotes, dashes, spaces, Δ, μ, and Greek look-alikes."""
     return s.translate(_TYPO_MAP)
 
+
+def is_meaningful_replacement(doc_target, replacement):
+    """Return True if `replacement` is a genuine text change vs `doc_target` (including fixing a look-alike symbol like ϐ -> β)."""
+    if replacement is None:
+        return False
+    if norm_typo(replacement) != norm_typo(doc_target):
+        return True
+    # Also treat as a real Track Change if doc_target contains a non-standard look-alike symbol (ϐ, ϒ, ∆, etc.)
+    # that replacement explicitly corrects to the standard symbol (β, γ, Δ)
+    if replacement != doc_target and any(ch in _LOOKALIKE_SYMBOL_CHARS for ch in doc_target):
+        return True
+    return False
+
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+M_NS = "http://schemas.openxmlformats.org/officeDocument/2006/math"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 CT_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 XML_NS = "http://www.w3.org/XML/1998/namespace"
 
 ET.register_namespace("w", W_NS)
+ET.register_namespace("m", M_NS)
 ET.register_namespace("r", R_NS)
 ET.register_namespace("wp", "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing")
 ET.register_namespace("a", "http://schemas.openxmlformats.org/drawingml/2006/main")
@@ -62,6 +85,56 @@ ET.register_namespace("w15", "http://schemas.microsoft.com/office/word/2012/word
 
 def wtag(local):
     return f"{{{W_NS}}}{local}"
+
+
+def mtag(local):
+    return f"{{{M_NS}}}{local}"
+
+
+def omml_to_text(node):
+    """Linearize an Office MathML (<m:oMath>) subtree into readable plain text."""
+    if node is None:
+        return ""
+    tag = node.tag
+    if tag == mtag("t"):
+        return node.text or ""
+    if tag == mtag("d"):
+        d_pr = node.find(mtag("dPr"))
+        beg_chr = "("
+        end_chr = ")"
+        if d_pr is not None:
+            bc = d_pr.find(mtag("begChr"))
+            ec = d_pr.find(mtag("endChr"))
+            if bc is not None and bc.get(mtag("val")) is not None:
+                beg_chr = bc.get(mtag("val"))
+            if ec is not None and ec.get(mtag("val")) is not None:
+                end_chr = ec.get(mtag("val"))
+        e_nodes = node.findall(mtag("e"))
+        inner = ", ".join(omml_to_text(e) for e in e_nodes)
+        return f"{beg_chr}{inner}{end_chr}"
+    if tag == mtag("f"):
+        num = node.find(mtag("num"))
+        den = node.find(mtag("den"))
+        return f"({omml_to_text(num)})/({omml_to_text(den)})"
+    if tag == mtag("sSup"):
+        e = node.find(mtag("e"))
+        sup = node.find(mtag("sup"))
+        return f"{omml_to_text(e)}^{{{omml_to_text(sup)}}}"
+    if tag == mtag("sSub"):
+        e = node.find(mtag("e"))
+        sub = node.find(mtag("sub"))
+        return f"{omml_to_text(e)}_{{{omml_to_text(sub)}}}"
+    if tag == mtag("sSubSup"):
+        e = node.find(mtag("e"))
+        sub = node.find(mtag("sub"))
+        sup = node.find(mtag("sup"))
+        return f"{omml_to_text(e)}_{{{omml_to_text(sub)}}}^{{{omml_to_text(sup)}}}"
+    if tag == mtag("rad"):
+        e = node.find(mtag("e"))
+        return f"sqrt({omml_to_text(e)})"
+    if tag.endswith("Pr"):
+        return ""
+    return "".join(omml_to_text(c) for c in node)
 
 
 def iter_body_blocks(container):
@@ -124,10 +197,25 @@ def unwrap_inline_containers_in_para(p_elem):
 
 
 def get_para_full_text(p_elem):
-    """Return full visible text of a paragraph (including runs inside inline <w:sdt>/<w:hyperlink>)."""
+    """Return full visible text of a paragraph (including runs inside inline <w:sdt>/<w:hyperlink> and <m:oMath>)."""
     parts = []
-    for r_el in p_elem.iter(wtag("r")):
-        parts.append(get_run_text(r_el))
+
+    def _walk(elem):
+        for node in elem:
+            tag = node.tag
+            if tag == wtag("del"):
+                continue
+            if tag == mtag("oMath"):
+                eq_txt = omml_to_text(node).strip()
+                if eq_txt:
+                    parts.append(eq_txt)
+                continue
+            if tag == wtag("r"):
+                parts.append(get_run_text(node))
+                continue
+            _walk(node)
+
+    _walk(p_elem)
     return "".join(parts)
 
 
@@ -233,11 +321,15 @@ def isolate_span_in_paragraph(p_elem, start_char, end_char):
 
 def minimize_diff_span(target, replacement):
     """Trim common prefix/suffix at word boundaries so Track Changes highlights the minimal changed phrase."""
-    if not replacement or norm_typo(target) == norm_typo(replacement):
+    if not replacement or not is_meaningful_replacement(target, replacement):
         return 0, len(target), target, replacement
 
-    nt = norm_typo(target)
-    nr = norm_typo(replacement)
+    # If target and replacement differ ONLY in a look-alike symbol (e.g. ϐ -> β), compare raw characters
+    if norm_typo(target) == norm_typo(replacement):
+        nt, nr = target, replacement
+    else:
+        nt = norm_typo(target)
+        nr = norm_typo(replacement)
 
     # Trim common prefix up to the last whitespace before difference
     pre_len = 0
@@ -262,16 +354,32 @@ def minimize_diff_span(target, replacement):
     return pre_len, len(target) - suf_len, t_mid, r_mid
 
 
-def _find_target_span(full_text, target):
-    """Find (start, end) of `target` in `full_text` using exact, typographic-normalized,
-    flexible-whitespace, or punctuation/citation-boundary fallback matching."""
-    pos = full_text.find(target)
+def _nth_find(haystack, needle, n=1):
+    """Find the 1-based `n`-th non-overlapping occurrence of `needle` in `haystack`, or -1."""
+    if not needle:
+        return -1
+    start = 0
+    for i in range(max(1, n)):
+        pos = haystack.find(needle, start)
+        if pos == -1:
+            return -1
+        if i + 1 == max(1, n):
+            return pos
+        start = pos + max(1, len(needle))
+    return -1
+
+
+def _find_target_span(full_text, target, occurrence=1):
+    """Find (start, end) of the `occurrence`-th match of `target` in `full_text` using exact, typographic-normalized,
+    flexible-whitespace, punctuation/citation-boundary, or OMML equation fallback matching."""
+    occ = max(1, int(occurrence or 1))
+    pos = _nth_find(full_text, target, occ)
     if pos != -1:
         return pos, pos + len(target)
 
     nf = norm_typo(full_text)
     nt = norm_typo(target)
-    pos = nf.find(nt)
+    pos = _nth_find(nf, nt, occ)
     if pos != -1:
         return pos, pos + len(target)
 
@@ -279,8 +387,9 @@ def _find_target_span(full_text, target):
     tokens = [re.escape(tok) for tok in nt.split() if tok]
     if tokens:
         pat = re.compile(r"\s+".join(tokens))
-        m = pat.search(nf)
-        if m:
+        matches = list(pat.finditer(nf))
+        if len(matches) >= occ:
+            m = matches[occ - 1]
             return m.start(), m.end()
 
     # Fallback 2: tolerate optional whitespace around punctuation and optional superscript citation numbers
@@ -297,9 +406,33 @@ def _find_target_span(full_text, target):
                 pat_parts.append(re.escape(tok))
         cite_bridge = r"(?:\s*\d{1,3}(?:[,;\s-]\d{1,3})*)?\s*"
         pat2 = re.compile(cite_bridge.join(pat_parts))
-        m2 = pat2.search(nf)
-        if m2:
+        matches2 = list(pat2.finditer(nf))
+        if len(matches2) >= occ:
+            m2 = matches2[occ - 1]
             return m2.start(), m2.end()
+
+    # Fallback 3: OMML equation sub/superscript & delimiter normalization
+    # e.g. "I_{0} = (8π^{3}c^{2})/(...) (dn/dc)^{2}KL^{2}" <-> "I0=8π3c2(dn/dc)2KL2"
+    _skip_math = set(" ^_{}()\t\n")
+    nf_chars = []
+    nf_idx = []
+    for i, ch in enumerate(nf):
+        if ch not in _skip_math:
+            nf_chars.append(ch)
+            nf_idx.append(i)
+    nf_compact = "".join(nf_chars)
+    nt_compact = "".join(ch for ch in nt if ch not in _skip_math)
+    if len(nt_compact) >= 4:
+        pos_c = _nth_find(nf_compact, nt_compact, occ)
+        if pos_c != -1:
+            return nf_idx[pos_c], nf_idx[pos_c + len(nt_compact) - 1] + 1
+        # Also allow bridged math clauses when a fraction denominator is elided in the target string
+        math_clauses = [re.escape(c) for c in re.findall(r"[A-Za-z0-9\u0370-\u03ff/=+*-]{2,}", nt_compact)]
+        if len(math_clauses) >= 2:
+            pat_m = re.compile(r".{0,45}?".join(math_clauses))
+            mm = pat_m.search(nf_compact)
+            if mm:
+                return nf_idx[mm.start()], nf_idx[mm.end() - 1] + 1
     return None
 
 
@@ -330,8 +463,57 @@ def get_para_subline_ranges(p_elem):
     return spans
 
 
-def apply_edit_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, author, date_str, comments_list):
-    """Attempt to apply `edit` to `p_elem`. Returns True if matched and applied."""
+def _anchor_comment_on_omath(p_elem, edit, comment_id_counter, comments_list):
+    """Attach a Word margin comment around the <m:oMathPara> or <m:oMath> element(s) in `p_elem`."""
+    math_children = [
+        c for c in list(p_elem)
+        if c.tag in (mtag("oMathPara"), mtag("oMath")) or c.find(f".//{mtag('oMath')}") is not None
+    ]
+    if not math_children:
+        return False
+
+    replacement = edit.get("replacement")
+    comment_txt = edit.get("comment") or ""
+    if replacement and norm_typo(replacement) != norm_typo(edit["target"]):
+        if replacement not in comment_txt:
+            suffix = f" [Suggested equation edit: '{edit['target']}' -> '{replacement}']"
+            comment_txt = (comment_txt + suffix).strip()
+    if not comment_txt:
+        comment_txt = f"Suggested equation edit: '{edit['target']}' -> '{replacement}'"
+
+    cid = str(comment_id_counter[0])
+    comment_id_counter[0] += 1
+    comments_list.append({
+        "id": cid,
+        "severity": edit.get("severity", ""),
+        "category": edit.get("category", ""),
+        "text": comment_txt,
+    })
+
+    children_now = list(p_elem)
+    first_pos = children_now.index(math_children[0])
+    crs = ET.Element(wtag("commentRangeStart"))
+    crs.set(wtag("id"), cid)
+    p_elem.insert(first_pos, crs)
+
+    children_now = list(p_elem)
+    last_pos = children_now.index(math_children[-1]) + 1
+    cre = ET.Element(wtag("commentRangeEnd"))
+    cre.set(wtag("id"), cid)
+    p_elem.insert(last_pos, cre)
+
+    ref_run = ET.Element(wtag("r"))
+    rpr = ET.SubElement(ref_run, wtag("rPr"))
+    rs = ET.SubElement(rpr, wtag("rStyle"))
+    rs.set(wtag("val"), "CommentReference")
+    cr = ET.SubElement(ref_run, wtag("commentReference"))
+    cr.set(wtag("id"), cid)
+    p_elem.insert(last_pos + 1, ref_run)
+    return True
+
+
+def _apply_single_occurrence_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, author, date_str, comments_list, occurrence=1):
+    """Attempt to apply the `occurrence`-th match of `edit` to `p_elem`. Returns True if matched and applied."""
     target = edit["target"]
     para_sub = edit.get("para_sub")
 
@@ -340,43 +522,32 @@ def apply_edit_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, au
             sub_ranges = get_para_subline_ranges(elem_for_sub)
             if para_sub <= len(sub_ranges):
                 s_lo, s_hi = sub_ranges[para_sub - 1]
-                sub_span = _find_target_span(text_str[s_lo:s_hi], target)
+                sub_span = _find_target_span(text_str[s_lo:s_hi], target, occurrence=occurrence)
                 if sub_span is not None:
                     return s_lo + sub_span[0], s_lo + sub_span[1]
-        return _find_target_span(text_str, target)
+        return _find_target_span(text_str, target, occurrence=occurrence)
 
-    full_text_direct = "".join(get_run_text(c) for c in p_elem if c.tag == wtag("r"))
-    span = _locate(full_text_direct, p_elem)
-    if span is None:
-        # Check if unwrapping inline <w:sdt>/<w:hyperlink>/<w:fldSimple> reveals the target
-        full_text_all = get_para_full_text(p_elem)
-        if _locate(full_text_all, p_elem) is not None:
-            unwrap_inline_containers_in_para(p_elem)
-            full_text = "".join(get_run_text(c) for c in p_elem if c.tag == wtag("r"))
-            span = _locate(full_text, p_elem)
-        else:
-            return False
-    else:
-        # Even if matched directly, if the paragraph has mixed <w:t>+<w:br/> runs and we are targeting a sub-line,
-        # unwrap/split <w:br/> runs so isolate_span_in_paragraph never clobbers a <w:br/>
-        if any(
-            any(c.tag in (wtag("br"), wtag("cr")) for c in r_el) and any(c.tag == wtag("t") for c in r_el)
-            for r_el in p_elem if r_el.tag == wtag("r")
-        ):
-            unwrap_inline_containers_in_para(p_elem)
-            full_text = "".join(get_run_text(c) for c in p_elem if c.tag == wtag("r"))
-            span = _locate(full_text, p_elem)
-        else:
-            full_text = full_text_direct
+    full_text_all = get_para_full_text(p_elem)
+    if _locate(full_text_all, p_elem) is None:
+        return False
+
+    # Unconditionally unwrap inline <w:sdt>, <w:hyperlink>, <w:fldSimple>, and split mixed <w:t>+<w:br/> runs
+    # so character offsets in direct <w:r> children align with full visible text
+    unwrap_inline_containers_in_para(p_elem)
+    full_text = "".join(get_run_text(c) for c in p_elem if c.tag == wtag("r"))
+    span = _locate(full_text, p_elem)
 
     if span is None:
+        # Target matched in full_text_all (which includes <m:oMath>) but not in plain <w:r> runs
+        if p_elem.find(f".//{mtag('oMath')}") is not None:
+            return _anchor_comment_on_omath(p_elem, edit, comment_id_counter, comments_list)
         return False
     pos, end_pos = span
     matched_doc_target = full_text[pos:end_pos]
 
     replacement = edit.get("replacement")
     comment_txt = edit.get("comment")
-    has_replacement = replacement is not None and norm_typo(replacement) != norm_typo(matched_doc_target)
+    has_replacement = is_meaningful_replacement(matched_doc_target, replacement)
 
     if has_replacement:
         sub_s, sub_e, del_str, ins_str = minimize_diff_span(matched_doc_target, replacement)
@@ -395,6 +566,8 @@ def apply_edit_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, au
 
     iso = isolate_span_in_paragraph(p_elem, span_start, span_end)
     if iso is None:
+        if p_elem.find(f".//{mtag('oMath')}") is not None:
+            return _anchor_comment_on_omath(p_elem, edit, comment_id_counter, comments_list)
         return False
     first_pos, last_pos, rpr_template = iso
 
@@ -471,6 +644,32 @@ def apply_edit_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, au
         insert_cursor += 1
 
     return True
+
+
+def apply_edit_to_paragraph(p_elem, edit, rev_id_counter, comment_id_counter, author, date_str, comments_list):
+    """Apply `edit` to `p_elem` (supporting `occurrence: N` and `all: true`)."""
+    occ = int(edit.get("occurrence") or 1)
+    apply_all = bool(edit.get("all"))
+    if not apply_all:
+        return _apply_single_occurrence_to_paragraph(
+            p_elem, edit, rev_id_counter, comment_id_counter, author, date_str, comments_list, occurrence=occ
+        )
+    # When `all: true` is set, apply iteratively (only attaching the margin comment on the first match to avoid duplicate comments)
+    any_applied = False
+    first_pass = True
+    for _ in range(50):
+        sub_edit = dict(edit) if first_pass else dict(edit, comment=None)
+        # Note: after a Track Change replacement, the replaced run is inside <w:del>/<w:ins>, so the next remaining match becomes occurrence 1
+        next_occ = 1 if is_meaningful_replacement(edit["target"], edit.get("replacement")) else (1 if first_pass else 999)
+        if not _apply_single_occurrence_to_paragraph(
+            p_elem, sub_edit, rev_id_counter, comment_id_counter, author, date_str, comments_list, occurrence=next_occ
+        ):
+            break
+        any_applied = True
+        first_pass = False
+        if not is_meaningful_replacement(edit["target"], edit.get("replacement")):
+            break
+    return any_applied
 
 
 def build_comments_xml(existing_xml_bytes, comments_list, author, date_str):
@@ -556,6 +755,7 @@ _VALID_EDIT_KEYS = {
     "comment", "note", "issue",
     "severity", "sev", "category", "cat",
     "id", "title", "location",
+    "occurrence", "all",
 }
 
 
@@ -625,7 +825,8 @@ def validate_and_normalize_edits(edits, json_path):
 
 
 def _best_fuzzy_hint(target, target_p, top_paras, all_paras):
-    """Return a short diagnostic string showing the closest text in the target paragraph and across the document."""
+    """Return a short diagnostic string showing the closest text in the target paragraph and across the document,
+    plus any non-ASCII Unicode codepoints (e.g. 'ϐ'=U+03D0) in the matched snippet."""
     nt = norm_typo(target).lower()
     p_preview = ""
     if target_p is not None and target_p in top_paras:
@@ -648,10 +849,16 @@ def _best_fuzzy_hint(target, target_p, top_paras, all_paras):
             s0 = max(0, match.b - 15)
             s1 = min(len(p_txt), match.b + w_len + 15)
             best_snip = p_txt[s0:s1]
-    if best_snip and p_preview:
-        return f"{p_preview} | closest overall in {best_loc}: \"...{best_snip}...\""
+    cp_note = ""
     if best_snip:
-        return f"closest match in {best_loc}: \"...{best_snip}...\""
+        non_ascii = sorted({c for c in best_snip if ord(c) > 127}, key=lambda c: best_snip.index(c))
+        if non_ascii:
+            cp_str = ", ".join(f"'{c}'=U+{ord(c):04X}" for c in non_ascii[:8])
+            cp_note = f" [Non-ASCII codepoints in doc snippet: {cp_str}]"
+    if best_snip and p_preview:
+        return f"{p_preview} | closest overall in {best_loc}: \"...{best_snip}...\"{cp_note}"
+    if best_snip:
+        return f"closest match in {best_loc}: \"...{best_snip}...\"{cp_note}"
     if p_preview:
         return p_preview
     return "no similar substring found in document"
@@ -712,6 +919,10 @@ def main():
             matched = apply_edit_to_paragraph(
                 top_paras[target_p], edit, rev_id_counter, comment_id_counter, author, date_str, comments_list
             )
+            if not matched and top_paras[target_p].find(f".//{mtag('oMath')}") is not None:
+                matched = _anchor_comment_on_omath(
+                    top_paras[target_p], edit, comment_id_counter, comments_list
+                )
         elif target_tbl is not None and target_tbl in tbl_paras:
             for p_cell in tbl_paras[target_tbl]:
                 if apply_edit_to_paragraph(
@@ -720,7 +931,12 @@ def main():
                     matched = True
                     break
         if not matched:
+            is_short_target = len(edit["target"].strip()) < 15
             for loc_label, p_el in all_paras:
+                if is_short_target and target_p is not None:
+                    m_loc = re.match(r"^\[P(\d+)\]$", loc_label)
+                    if not m_loc or abs(int(m_loc.group(1)) - target_p) > 3:
+                        continue
                 if apply_edit_to_paragraph(
                     p_el, edit, rev_id_counter, comment_id_counter, author, date_str, comments_list
                 ):

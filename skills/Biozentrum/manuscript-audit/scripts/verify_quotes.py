@@ -83,6 +83,27 @@ def main():
     print(f"  Summary: {len(blocks)} blockquotes checked, {ok_runs} verified source runs, {gap_count} gaps flagged.")
     print("  (Editorial notes like [Cited in P22] or Reviewer labels are OK; verify any prose gaps.)")
 
+    print("\n== 1B. INLINE QUOTES IN ISSUE PROSE (>= 6 words, INFO / REVIEW) ==")
+    issue_pars = re.findall(r'<p>\s*<strong>Issue:</strong>(.*?)</p>', clean, flags=re.S | re.I)
+    inline_q_checked = 0
+    inline_q_gaps = 0
+    for ip in issue_pars:
+        ip_plain = _html.unescape(re.sub(r'<[^>]+>', ' ', ip))
+        for mq in re.finditer(r'(?:"([^"]{25,})"|\u201c([^\u201d]{25,})\u201d)', ip_plain):
+            q_str = mq.group(1) or mq.group(2)
+            q_words = norm(q_str).split()
+            if len(q_words) < 6:
+                continue
+            inline_q_checked += 1
+            if ' '.join(q_words) not in src:
+                # Check if at least half of 4-grams appear in src
+                n_4g = max(1, len(q_words) - 3)
+                hits_4g = sum(1 for k in range(n_4g) if ' '.join(q_words[k:k + 4]) in src)
+                if hits_4g / n_4g < 0.6:
+                    inline_q_gaps += 1
+                    print(f"  [Inline Quote WARN] Not found verbatim in source text: \"{q_str[:120]}\"")
+    print(f"  Summary: {inline_q_checked} inline quote(s) (>=6 words) checked, {inline_q_gaps} non-verbatim warning(s).")
+
     print("\n== 2. DISTINCTIVE NUMBERS IN REPORT NOT FOUND IN SOURCES (INFO ONLY — non-blocking) ==")
     body = re.sub(r'<style.*?</style>|<head.*?</head>|<script.*?</script>', ' ', clean, flags=re.S | re.I)
     body = re.sub(r'<[^>]*>', ' ', body)

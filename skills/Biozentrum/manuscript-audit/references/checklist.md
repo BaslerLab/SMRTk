@@ -10,32 +10,39 @@ This reference provides a detailed, discipline-agnostic catalog of failure modes
 - **Contiguous Numbering**: Reference list is numbered sequentially (`1..N`) with no skipped numbers or unnumbered entries.
 - **Zero Uncited References**: Every reference `1..N` in the bibliography is cited at least once in the main text, tables, or figure legends.
 - **Zero Dangling Callouts**: No in-text citation number exceeds `N` or points to a missing entry.
-- **In-Text Citation Style Uniformity & Author–Year / Zotero Hygiene**:
+- **In-Text Citation Style Uniformity, Placement & Author–Year / Zotero Hygiene**:
   - Check whether in-text citations mix parenthetical `(n)` and bracketed `[n]` styles, or whether parenthetical `(n)` is used alongside a journal style that requires bracketed `[n]`, superscript, or author-year citations.
+  - Check for displaced or orphan citation brackets at the start of a sentence (`"[13]Previously, ..."` or `". [10,12] Next sentence"`) where a reference belongs at the end of the preceding sentence, as well as unspaced citation brackets attached directly to words (`"word[41]"`).
   - In Author–Year manuscripts, check for duplicate-year citation artifacts such as `"Author et al, 2019, 2019"` (caused by two unmerged citation-manager entries from the same year that should be disambiguated as `2019a, 2019b` or merged into a single entry).
   - Verify bidirectional Author–Year coverage: every `(Author, Year)` cited in the text exists in the alphabetical bibliography, and every bibliography entry is cited at least once.
 - **Zero Duplicate References**: No two entries in the reference list refer to the same publication (including preprints vs. published versions of the same study, or identical entries pasted under two numbers). When duplicates are found, `ref_audit.py` reports the exact paragraphs `[P#]` where each duplicate number is cited so callouts to the higher number can be re-pointed before shifting downstream references (`Refs k+1..N -> k..N-1`).
 - **Bibliographic Formatting, Live Crossref Resolution & Metadata Hygiene**:
-  - No multi-space or tab-delimited corruption inside titles or author lists.
+  - No multi-space or tab-delimited corruption, raw HTML entities (`&amp;`, `&lt;`), or non-breaking spaces (`U+00A0`) inside titles or author lists.
   - No broken/split words (e.g., single capital letter separated from its word stem: `"B acteria"`).
-  - Every journal article entry includes authors, title, journal name, publication year, and volume/pages or article ID/DOI (watch for truncated page ranges like `"6-."` missing the ending page number).
+  - Every journal article entry includes authors, title, journal name, publication year, and volume/pages or article ID/DOI (watch for truncated page ranges like `"6-."`, missing page numbers after volume `"1995;16."`, or ALL-CAPS titles imported from legacy databases).
+  - Watch for citation-manager export corruptions: intra-entry duplicate DOIs, a bare DOI string (`10.1016/...`) placed in the journal-name slot instead of the journal title, web-scraper metadata duplication (`"2017 18:1 18"`), book-chapter `'in <Journal>'` prefixes on regular journal articles, or database disambiguation suffixes like `'Science (1979)'`.
   - Preprint DOIs (`10.1101/...` bioRxiv/medRxiv, `10.21203/...` Research Square) must be explicitly labeled as preprints (not disguised under a journal name or date) and checked via `deep_ref_audit.py` for whether a peer-reviewed published Version of Record (`is-preprint-of`) now exists.
   - Check for Retraction notices, Expressions of Concern, or Corrections via `deep_ref_audit.py`.
   - Check for leftover editorial notes or placeholders inside references (e.g., `"(if this paper was accepted..."`, `"TODO"`, `"in preparation"`).
   - Check that software/package version numbers cited in references match the version numbers stated in the main text/Methods (`ref_audit.py`).
-  - Species/gene names in reference titles are spelled accurately (watch for OCR corruptions in older papers).
+  - Species/taxonomic binomial names in reference titles follow standard binomial case (`Genus species` with lowercase specific epithet, e.g., `Escherichia coli` rather than title-cased `Escherichia Coli`).
 
-### 1.2 Topical & Placement Verification (Manual + Search Verification)
-- **Claim-to-Reference Alignment**: Does the cited paper actually demonstrate the specific claim in the sentence? Common failure modes:
-  - **Model / Organism Swap**: Text claims a phenomenon in organism/tissue $X$, but the cited reference studied organism/tissue $Y$.
-  - **Pathway / Structure Swap**: Text cites a paper on structure/isoform $A$ (e.g., extracellular structure, acute phase) to support a claim about structure/isoform $B$ (e.g., intracellular isoform, chronic/latent phase), especially when the actual reference for $B$ is elsewhere in the bibliography.
-  - **Mutant / Genotype Swap**: Text cites a range `(a, b–d)` for a specific mutant/knockout phenotype, where one of the middle papers (`c`) inside the range studies an unrelated gene or species.
-  - **Category Overgeneralization**: Text groups two taxa/factors together under a shared qualifier (e.g., *"Intranuclear bacteria such as X and Y..."*), where the cited papers show that $Y$ does not belong to that category.
+### 1.2 Topical, Semantic, Polarity & Placement Verification (`deep_ref_audit.py` + Model Review)
+- **Embedded CSL-JSON Abstract & Title Extraction**:
+  - When a `.docx` file contains Mendeley WebExtension (`word/webextensions/webextension*.xml`) or Zotero (`w:instrText`) CSL-JSON metadata, `docx2txt.py --extract-csl` and `deep_ref_audit.py` automatically extract the embedded paper **titles**, **DOIs**, and **abstracts** alongside each citing sentence so you can directly evaluate semantic support.
+- **Claim-to-Reference Alignment**: Read the citing sentence alongside the cited paper's title and abstract. Common failure modes to look for:
+  - **Chronological Anachronism**: Citing a paper published before a named technology, method, or discovery existed.
+  - **Abstract Polarity Reversal**: Text claims factor $X$ activates/promotes process $Y$, whereas the cited title or abstract explicitly states that $X$ does **not** promote $Y$ or acts in the opposite direction.
+  - **System, Compartment, or Context Mismatch**: Text claims a phenomenon in system/compartment/condition $A$, whereas the cited paper studied system/compartment/condition $B$.
+  - **Reagent / Compound Class Mismatch**: Text cites a paper on class $A$ to support a claim about a distinct class $B$.
+  - **Identifier / Isoform / Variant Swap**: Text cites a paper on variant/component $A$ to support a claim about variant/component $B$, especially when the actual reference for $B$ is elsewhere in the bibliography.
+  - **Citation Range Over-Inclusion**: Text cites a range `(a, b–d)` for a specific claim, where one of the middle papers (`c`) inside the range studies an unrelated topic.
+  - **Category Overgeneralization**: Text groups multiple items together under a shared qualifier where the cited papers show that one of the items does not belong to that category.
 - **Clause-Level Callout Placement**:
   - When a sentence has two distinct clauses ("Whereas $A$ occurs in condition $X$, $B$ remains uncharacterized in condition $Y$ (1,2)"), verify whether `(1,2)` support clause 1 ($A$ in $X$) or clause 2 ($B$ in $Y$). Place citations immediately after the specific clause they support.
   - When a two-sentence passage states an empirical finding in sentence 1 and a speculation in sentence 2, ensure the citation is attached to sentence 1 (the empirical report), not solely to the speculation in sentence 2.
 - **Table & Reagent Source Attribution**:
-  - In strain/plasmid/cell-line/antibody tables, verify that the cited "Source / Reference" actually created the exact construct listed (e.g., watch for a 1980s/1990s mutant paper cited as the source of a strain carrying a modern fluorescent reporter plasmid from a different study).
+  - In materials, sample, or reagent tables (`1..N` and `Supplementary References` `S1..SN`), verify that the cited "Source / Reference" actually describes the specific item or construct listed.
 
 ---
 
@@ -93,55 +100,65 @@ Always inspect the full figure page at 150–200 DPI for layout, then crop and i
   - **Multiple Scale Bars in One Panel**: If different rows/insets of the same panel have different magnifications and different scale bar lengths (e.g., `WT` row vs. `ΔmutA` row), the legend must state both scale bar values rather than a single value.
   - **Geometric Sanity Check**: If an overview image has a `100 µm` scale bar and a dashed box that is ~`80 µm` wide, the scale bar inside the magnified view of that box (~25% of the box width) cannot be `50 µm`—it is `20 µm`! Always check that overview vs. inset scale bar numbers are geometrically consistent.
 
-### 3.4 In-Image Text, Axes & Condition Labels (400 DPI Check)
-- **Spelling & Grammar of Figure Text**: Read every header, axis label, and legend key inside the figure artwork at high DPI:
-  - Catch spelling errors in workflow headers (e.g., `"Pre-proccessed"`).
-  - Catch singular/plural grammatical errors on axes (e.g., `"per 1000 cell"` instead of `"cells"`).
-  - Check consistency of column headers across panels (`"Merge"` vs. `"Merged"`).
-- **Missing Condition Titles**: If one panel has a condition title `"Inhibitor X"` above it, its paired control panel should have `"Vehicle / DMSO"` above it.
-- **Strain / Genotype Disclosure on Axes & Legends**: If a plot compares two compartments or conditions where one group uses `WT` and the other uses a mutant (`ΔmutA`), both the legend and/or axis must disclose the difference in genotype.
+### 3.4 In-Image Text, Axes, Condition Labels, Schematics & Image Integrity (400 DPI Check)
+- **Spelling & Grammar of Figure Text (`render_figs.py page-text --compare-text` + Visual Inspection)**: Read every header, axis label, and legend key inside the figure artwork at high DPI:
+  - Catch spelling or grammatical errors in workflow headers, legends, and axis titles.
+  - Check consistency of column headers and embedded PDF identifiers against the `.docx` text.
+- **Axis Breaks & Colorbar Orientation**:
+  - Check for undisclosed y-axis breaks/truncations and inverted or out-of-order heatmap/colorbar tick labels.
+- **Missing Condition Titles & Prose-vs-Legend Panel Swaps**:
+  - If one panel has a condition title above it, its paired control panel should have a corresponding title.
+  - Check whether the Results prose swaps adjacent panel letters relative to the Figure Legend and artwork.
+- **Condition / Group Disclosure on Axes & Legends**:
+  - If a plot compares groups that differ in condition, sample type, or background, ensure both the legend and/or axis clearly disclose that difference.
+- **Schematic Logic, Stoichiometry & Boundary Consistency**:
+  - In schematic or model diagrams, trace directional arrows (activation vs. inhibition, input vs. output) against the experimental findings reported in the Results.
+  - Verify that multi-subunit stoichiometries and structural/domain boundary coordinates in diagrams are arithmetically consistent and non-overlapping.
+- **Image, Gel & Blot Crop Integrity**:
+  - Inspect all gels, blots, plates, and image crops across Main and Supplementary figures for accidental duplication/reuse, horizontal mirroring, uncropped borders, unlabeled size/weight markers, or undisclosed lane splicing.
 
-### 3.5 Supplementary Video & Movie Verification (Automated via `render_figs.py video`)
-- **Container & Stream Hygiene**: Verify that every cited `Video S1..SN` / `Movie S1..SN` file opens cleanly, has non-zero duration and standard codec/resolution, and does **not** contain an unintentional microphone/room audio track.
-- **Storyboard vs. Video Legend Parity**: Inspect the timestamped storyboard contact sheet (`*_storyboard.jpg`) generated by `render_figs.py video` against the corresponding Video Legend to verify channel colors, scale bars, timestamp overlays (`hpi` / `min`), and that each video file matches its numbered legend (no swapped video files).
+### 3.5 Supplementary Video & Movie Verification (`render_figs.py video`)
+- **Container, Stream & Playback Metadata Hygiene**:
+  - Verify that every cited video/movie file (including videos inside `.zip` archives) opens cleanly, has non-zero duration and standard codec/resolution, and does **not** contain an unintentional microphone/room audio track.
+  - Compare the video container's actual playback frame rate (`fps`), total frame count, and duration against the descriptions stated in the Video Legend.
+- **Storyboard vs. Video Legend Parity**: Inspect the timestamped storyboard contact sheet (`*_storyboard.jpg`) generated by `render_figs.py video` against the corresponding Video Legend to verify channel colors, scale bars, timestamp overlays, and that each video file matches its numbered legend (no swapped video files).
 
 ---
 
 ## 4. Quantitative, Statistical & Arithmetic Triangulation
 
-### 4.1 Text Numbers ↔ Main Graphs ↔ Supplementary Graphs
+### 4.1 Text Numbers ↔ Main Graphs ↔ Supplementary Graphs ↔ Source Data
 - **Bar Height & Stacked-Bar Sum Verification**:
   - For every number stated in the Results text, read the corresponding bar/point value in the main figure AND in any companion supplementary figure.
-  - **Adjacent Bar Swap Detection**: When the text states Category $A = 38$ and Category $B = 7$ (confirmed by the supplementary replicate plot), but the main figure stacked bar chart plots Category $A = 7$ and Category $B = 38$, the bars or x-axis labels in the main figure are **swapped**!
+  - **Adjacent Bar Swap Detection**: When the text states Category $A = 38$ and Category $B = 7$ (confirmed by the supplementary plot or source data), but the main figure chart plots Category $A = 7$ and Category $B = 38$, the bars or x-axis labels in the main figure are **swapped**!
 - **Scatter / Dot Count vs. Stated `n`**:
   - Count the individual plotted points (dots, triangles, squares) on every bar/scatter plot and compare against the `n = X` stated in the figure legend and Results/Methods text.
-  - Flag discrepancies (e.g., legend states `n = 3`, but the control bar plots `4` dots; or text states `3 biological replicates`, while `WT` plots `6` dots and mutants plot `3–4` dots).
-  - Ensure the legend defines what each dot represents (biological replicate vs. technical replicate / field of view / single cell / single pixel) and what the error bars represent (`mean ± SD` vs. `mean ± SEM` vs. `median ± IQR`).
+  - Ensure the legend defines what each point represents (independent biological replicate vs. technical replicate / field of view / single observation) and what the error bars represent (`mean ± SD` vs. `mean ± SEM` vs. `median ± IQR`).
 - **Statistical Test & Symbol Hygiene**:
   - Every p-value threshold symbol (`ns`, `*`, `**`, `***`, `****`) defined in a figure legend should correspond to symbols actually used in that panel (remove unused symbols copied from boilerplate legends).
-  - Ensure the statistical test stated in the legend (`two-tailed Student's t-test`, `one-way ANOVA`) matches the experimental design and the Statistical Analysis section in Materials & Methods.
-- **Mathematical / Algorithmic & OMML Equation Parity**:
-  - Verify that the prose description of quantitative plots (such as 2D pixel intensity scatter plots, colocalization indices, or normalization formulas) in the Results and Figure Legends is mathematically valid and consistent with the Materials & Methods section.
-  - Verify that Office MathML (`<m:oMath>`) equations extracted by `docx2txt.py` use the exact same symbol definitions (`R(t)`, `A_0`, subscripts/superscripts) as the surrounding prose and figure axis labels.
-- **Excel Source Data, Supplementary Spreadsheets & Reporting Checklists (Automated via `scripts/xlsx_audit.py`)**:
-  - Recompute `n`, `mean`, `SD`, `SEM`, and `median` directly from `.xlsx` source-data sheets (`xlsx_audit.py --manuscript-txt`) and verify that every `mean ± SD/SEM` and sample-size `n` claim in the manuscript text and figure legends matches the underlying spreadsheet values (catching stale rounding or subset/row-count discrepancies).
-  - Check every `.xlsx` supplementary table and reporting checklist for unfilled template strings (`<insert here>`, `Example for demonstration`, `TODO`), Excel formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`), and incomplete figure/panel rows.
+  - Ensure the statistical test stated in the legend matches the experimental design and the Statistical Analysis section in Materials & Methods (flag hybrid parametric/non-parametric descriptions like `"Mann-Whitney or Student's t-test"` on `median ± IQR` data, `"75% IQR"` instead of `25th–75th percentile (50% IQR)` on boxplots, or parametric tests applied to `n = 2` replicates).
+- **Mathematical / Algorithmic & Equation Parity**:
+  - Verify that the prose description of quantitative plots, indices, or normalization formulas in the Results and Figure Legends is mathematically valid and consistent with Materials & Methods.
+  - Verify that Office MathML (`<m:oMath>`) equations extracted by `docx2txt.py` use the exact same variable symbols and subscripts/superscripts as the surrounding prose definitions, worked numerical examples, and figure axis labels.
+- **Excel Source Data, `.csv`/`.tsv`/`.zip` Archives, Supplementary Spreadsheets & XFA Reporting Checklists (`scripts/xlsx_audit.py`)**:
+  - Compare the `n`, `mean`, `SD`, `SEM`, and `median` computed by `xlsx_audit.py`—as well as any paired adjacent-column differences (`Paired(B-A)`) or replicate time series—against the `mean ± SD/SEM` and sample-size `n` claims in the manuscript text and figure legends.
+  - Check whether a `mean ± SD` statement in the prose accidentally reports a second group's mean in place of the first group's SD (`Mean-as-SD conflation`), or confuses a window average with a cumulative sum.
+  - Check every `.xlsx`/`.csv` supplementary table, `.zip` archive (sequence counts in `.fasta`/`.aln` files and archive filename typos), and reporting checklist for unfilled template strings (`<insert here>`, `TODO`), non-numeric censored tokens embedded inside numeric series, Excel formula errors (`#REF!`, `#DIV/0!`, `#VALUE!`), and incomplete figure/panel rows.
+  - When an Adobe XFA PDF Reporting Summary is included (extracted by `xlsx_audit.py`, including `/FlateDecode` compressed object streams), compare its filled fields (such as data exclusion statements, data availability statements, descriptive statistics definitions, and reagent validation details) against the manuscript text, Methods, and source data.
 
-### 4.2 Experimental Recipes, Dilutions & Time Windows
-- **Dilution & Concentration Arithmetic** (Automated via `scripts/consistency_audit.py`):
-  - Recompute every stock-to-working dilution (`V_stock / V_total = C_final / C_stock`).
-  - Flag 10-fold calculation errors (e.g., `1.5 µL` of DMSO in `300 µL` medium is `0.5% v/v`, not `0.05% v/v`!) and discrepancies between the concentration stated in Results (`0.5% DMSO`) vs. Methods/Legends (`0.05% DMSO`).
+### 4.2 Experimental Recipes, Dilutions & Cross-Section Parameters
+- **Dilution & Concentration Arithmetic** (`scripts/consistency_audit.py`):
+  - Recompute stock-to-working dilutions (`V_stock / V_total = C_final / C_stock`) and check for 10-fold calculation errors or discrepancies between concentrations stated in Results vs. Methods/Legends.
 - **Cross-Section Parameter Consistency**:
-  - Compare **timepoints / imaging windows** (`14–17 hpi` vs. `15–17 hpi` vs. `14–16 hpi`), **MOIs** (`MOI of 10` vs. `MOI of 500`), **temperatures**, **bath/wash counts and durations**, and **antibiotic concentrations** across Results, Materials & Methods, Figure Legends, and Video Legends.
+  - Compare experimental parameters—such as time windows, temperatures, concentrations, doses, wash counts/durations, and analysis thresholds—across Results, Materials & Methods, Figure Legends, Tables, and Video Legends.
 
 ### 4.3 Physical Plausibility, Headline Claims & Source-Protocol Cross-Check
-- **Physical & Optical Limits**:
-  - Check optical resolution claims against the diffraction limit (`~200–250 nm` laterally for standard confocal microscopy) and verify whether a stated dimension refers to **pre-expansion (effective biological) scale** vs. **post-expansion (physical hydrogel) scale**.
-  - Check geometric area/volume conversions (e.g., `3 × 3 mm = 9 mm² = 0.09 cm²`) and chemical solubility/molarity limits.
+- **Physical & Methodological Plausibility**:
+  - Check that stated physical measurements, resolution claims, scaling factors, and unit conversions (e.g., 1D linear vs. 2D area vs. 3D volume scaling) are physically and mathematically sound.
 - **Headline Quantitative Claim Completeness**:
-  - Central quantitative claims in the Abstract/Results (e.g., expansion factors, fold-changes, inhibition percentages) must not appear only as bare numbers—verify that they have a measurement procedure in Materials & Methods, sample size (`n`), and a quantification plot or `mean ± SD/SEM`.
+  - Central quantitative claims in the Abstract/Results should have a measurement procedure in Materials & Methods, an explicit sample size (`n`), and a corresponding figure panel, table, or `mean ± SD/SEM`.
 - **Published Source-Protocol Verification**:
-  - When a manuscript adapts a published method and cites a paper for specific reagent concentrations, chemical anchoring/labeling steps, or resolution benchmarks, verify that the manuscript's numbers and terminology match the cited protocol (and any published errata/corrections).
+  - When a manuscript adapts a published method and cites a paper for specific reagent concentrations, equations, or benchmarks, verify that the manuscript's numbers and terminology match the cited protocol.
 
 ---
 
@@ -154,41 +171,50 @@ When auditing a submission or post-review resubmission that includes a point-by-
 2. **Promised Edits & Future-Tense Leftovers**:
    - Scan the rebuttal for future-tense or conditional draft language (`"We will change the title..."`, `"We have this data and can re-analyze..."`, `"If the reviewers consider these informative, we would be happy to include them..."`).
    - Verify whether each promised change (e.g., title change, rewritten Introduction/Discussion, added control experiment) was actually executed in the manuscript file.
-3. **Line-Number & Quote Verification (Automated via `consistency_audit.py --format-audit`)**:
+3. **Line-Number & Quote Verification (`consistency_audit.py --format-audit`)**:
    - Check every line-number citation (`lines L1–L2`) in the rebuttal against the manuscript.
-   - Check if inserting new paragraphs during revision shifted downstream line numbers (so that `lines 277–281` in the rebuttal now point to the wrong paragraph!).
-   - Check if Word continuous line numbering (`<w:lnNumType>`) counts unsuppressed blank spacer paragraphs or mixed font sizes (`12 pt` vs. `10/11 pt`), and report both non-empty text line numbers and Word line numbers with the exact `+N` empty-paragraph drift offset.
+   - Check if inserting new paragraphs during revision shifted downstream line numbers.
+   - Check if Word continuous line numbering (`<w:lnNumType>`) counts unsuppressed blank spacer paragraphs or mixed font sizes, and report both non-empty text line numbers and Word line numbers with the exact `+N` empty-paragraph drift offset.
 4. **Figure & Video Callout Accuracy in the Rebuttal**:
-   - Verify that every `Figure X` or `Video SY` cited in the rebuttal actually shows what the rebuttal claims (watch for old figure/video numbers from the initial submission or shifted supplementary figure numbers like citing `Fig. S5` for an experiment that is now `Fig. S6`).
+   - Verify that every `Figure X` or `Video SY` cited in the rebuttal actually shows what the rebuttal claims (watching for old figure/video numbers from the initial submission or shifted supplementary figure numbers).
 5. **Definitions & Explanations Given Only in the Rebuttal**:
-   - If the rebuttal defines a key quantitative threshold or experimental rationale in response to a reviewer (e.g., *"Here we define multinucleated cells as cells having >3 nuclei"*, or why a higher `MOI` or dose was used for a mutant), verify that this definition/rationale was also added to the manuscript text/Methods!
+   - If the rebuttal defines a key quantitative threshold or experimental rationale in response to a reviewer, verify that this definition/rationale was also added to the manuscript text/Methods.
 6. **Embedded Rebuttal Figures**:
-   - Extract all images embedded in the rebuttal letter (`docx2txt.py --media`) and check that each has a caption/explanation, channel labels, and scale bar dimensions.
+   - Extract all images embedded in the rebuttal letter (`docx2txt.py --media`) and check that each has a caption/explanation, condition/channel labels, and scale bar dimensions.
 7. **Addressee & Cross-Response Hygiene**:
    - Check for copy-paste errors such as writing *"We agree with the editor..."* inside a response to Reviewer #1, or referencing *"as shown in our response to Reviewer 2"* when the data is in Reviewer 1's response.
-8. **Cover Letter ↔ Manuscript Consistency (Automated via `consistency_audit.py --cover-letter`)**:
-   - Verify that the manuscript title, author list, and headline quantitative/mechanistic claims stated in the Cover Letter match the manuscript.
-   - Verify that every `Figure X`, `Fig. SX`, `Table SX`, or `Video SX` cited in the Cover Letter actually exists in the manuscript and matches its legend (e.g., catch cases where the Cover Letter cites `"Figure 7"` for a model schematic after the schematic was moved to `"Figure S9"` and the main text only has `Figures 1–6`).
+8. **Cover Letter ↔ Manuscript Consistency (`consistency_audit.py --cover-letter`)**:
+   - Verify that the manuscript title, author list, and headline claims stated in the Cover Letter match the manuscript.
+   - Verify that every `Figure X`, `Fig. SX`, `Table SX`, or `Video SX` cited in the Cover Letter exists in the manuscript and matches its legend, and check that `Acknowledgments` and the `Cover Letter` do not reference experiments or sections that were removed from the manuscript.
 
 ---
 
-## 6. Prose, Scientific Homophones, Unit Hygiene & Journal Declarations (Automated via `scripts/consistency_audit.py`)
+## 6. Prose, Nomenclature, Scientific Homophones, Unit Hygiene & Journal Declarations (`scripts/consistency_audit.py`)
 
-1. **Consecutive Duplicate Words & Garbled Duplicated Clauses**:
-   - Check for immediate word repetitions (`"images images"`, `"the the"`) and leftover draft clause duplications within the same sentence (e.g., *"the inner layer is surrounded by a thin layer surrounded by an outer membrane"*).
-2. **Context-Sensitive Scientific Homophones**:
-   - Watch for valid-English words that pass standard spellcheckers but are wrong in scientific context:
-     - `commercialized / fluorescent / membrane dies` -> `dyes`
-     - `unclear invasion / envelope / pore / localization` -> `nuclear ...`
-     - `mutant / bacterial / wild-type stain(s)` -> `strain(s)`
-     - `respiratory / gastrointestinal / urinary track` -> `tract`
-     - `compliment fixation / cascade / complemented` -> `complement` / `complemented`
-     - `principle component / investigator` -> `principal`
-     - `discreet bands / puncta / foci` -> `discrete`
-3. **Unit, Time & Spacing Uniformity**:
-   - Harmonize `mL` vs. `ml`, `µL` vs. `µl`/`uL`, `µm` vs. `um`, `s` vs. `sec`, `h` vs. `hr`/`hrs`, and number-unit spacing (`17 h` vs. `17h`, `1.5 min` vs. `1min30sec`).
-4. **Mandatory Journal Declaration Sections & Repository Accessions**:
+1. **Consecutive Duplicate Words, Garbled Clauses & Copy-Paste Legend Duplication**:
+   - Check for immediate word repetitions (`"the the"`), leftover draft clause duplications within the same sentence, and duplicated paragraph blocks inside figure legends.
+2. **Nomenclature, Acronym & Cross-Table Consistency**:
+   - Check for within-document nomenclature variations (e.g., prefix/suffix drift, hyphenated-vs-unhyphenated variants, and character transpositions in recurring identifiers or acronyms).
+   - Verify that every strain, construct, or reagent code mentioned in the Main Text/Legends is present in the corresponding Strain/Reagent Table (and vice versa), that table-vs-prose decimal precision matches (`2.9` in prose vs. `2.85` in Table 1), and flag any caption-only tables whose body is missing from both the `.docx` and `.xlsx` files.
+   - Check software/package version consistency across Main Text, Materials & Methods, and Figure Legends.
+3. **Context-Sensitive Homophones & Malapropisms**:
+   - Watch for valid-English words that pass standard spellcheckers but are wrong in technical context (e.g., `dies` vs. `dyes`, `silicon oil` vs. `silicone oil`, `unclear` vs. `nuclear`, `stain` vs. `strain`, `track` vs. `tract`, `compliment` vs. `complement`, `principle` vs. `principal`, `discreet` vs. `discrete`, `statically` vs. `statistically`, `rational` vs. `rationale`).
+4. **Unit, Time, Symbol-Font, Greek Look-Alike & Spacing Uniformity**:
+   - Harmonize unit capitalization and spacing (`mL` vs. `ml`, `µL` vs. `µl`/`uL`, `µm` vs. `um`, `s` vs. `sec`, `h` vs. `hr`/`hrs`, `17 h` vs. `17h`, comma decimal separators `4,3` vs. `4.3` in prose and tables).
+   - Flag non-SI symbol corruptions (such as letter `'o'` or `'0'` for degree `°C`, non-standard Greek/math look-alike characters like curled beta `ϐ` `U+03D0` or hooked upsilon `ϒ` `U+03D2` misused for `β` and `γ`, or legacy Symbol-font ASCII substitutions where Greek letters or mathematical symbols were flattened into plain Latin characters or digits), missing units on numerical measurements, and unbalanced parentheses.
+5. **Mandatory Journal Declaration Sections, Author Contributions & Repository Accessions**:
    - Verify presence of `Acknowledgments` / `Funding`, `Author Contributions`, `Competing Interests` / `Conflict of Interest`, and `Data / Code Availability`.
-   - Verify that all public repository accession numbers include their official database prefix (e.g., `GSE100001` rather than bare `"GEO accession 100001"`, `PRJNA...`, `PXD...`, `EMD-...`) and resolve to the correct study via `deep_ref_audit.py`.
-5. **Word Production & Citation-Manager Hygiene (`docx2txt.py --audit-format`)**:
+   - Verify that every author listed on the title page is included in `Author Contributions` (by full name or initials) and vice versa.
+   - Verify that all public repository accession numbers include their official database prefix and resolve to the correct study via `deep_ref_audit.py`.
+6. **Word Production & Citation-Manager Hygiene (`docx2txt.py --audit-format`)**:
    - Flag active citation-manager fields (`ADDIN ZOTERO`, `ADDIN EN.CITE`, `ADDIN MENDELEY`) or bibliographies wrapped inside `<w:sdt>` Structured Document Tags that should be unformatted to plain text before final submission if required by the journal's production system.
+7. **Abbreviation Lifecycle Hygiene (`consistency_audit.py` Section 8)**:
+   - Flag acronyms used in the text before their first parenthetical expansion (`used before definition`), acronyms expanded multiple times across different paragraphs (`redundant re-definition`), and acronyms defined once but never used again.
+8. **Editing-Collision, Grammar & SI Notation Hygiene (`consistency_audit.py` Section 9)**:
+   - Flag Track-Change merge collisions of adjacent auxiliary/reporting verbs (`has have`, `was were`, `is are`, `showed demonstrated`), indefinite article phonetic mismatches (`a osmotic`, `an uniform`), double comparatives (`more higher`), stripped power-of-10 superscripts (`106 CFU/mL` instead of `10^6 CFU/mL`), and within-document mixing of `uM`/`µM`, `mL`/`ml`, `h`/`hr`/`hrs`, or `37°C`/`37 °C`.
+9. **Conditional Submission-Readiness & Minimal Reporting Triggers (`consistency_audit.py` Section 5b)**:
+   - When vertebrate animals are used, verify an IACUC / institutional animal ethics approval statement is present; when human subjects or clinical samples are used, verify IRB / Informed Consent is stated; when mammalian cell lines are used, verify mycoplasma testing is stated; when high-throughput sequencing, proteomics, or structural determination is performed, verify public repository accession numbers (`GEO`, `SRA`, `PRIDE`, `PDB`, `EMDB`, `Zenodo`) are provided rather than `"upon request"`; and verify version numbers for named analysis software.
+10. **Word Table (`[TABLE N]`) Internal Arithmetic & PDF Supplement Auditing (`consistency_audit.py` Section 10 & `render_figs.py pdf-to-indexed-txt`)**:
+    - Verify that `k (P%)` subgroup cells inside Word tables match `k / N * 100` for the stated column/row total `N`, flag unfilled table placeholders (`TODO`, `TBD`), and extract/audit prose, legends, tables, and references from PDF-formatted Supplementary Information files (`Supplementary_Information.pdf`) alongside `.docx` files.
+11. **Cross-Section Claim Alignment (`Abstract ↔ Results ↔ Discussion`) & PubMed/CSL Abstract Verification (`consistency_audit.py` Section 11 & `deep_ref_audit.py`)**:
+    - Compare sentences in the Abstract and Discussion against matching sentences in Results to catch cross-section quantitative drift (different fold-changes, percentages, or `n`) or polarity/negation reversals; verify cited references against both embedded Mendeley/Zotero CSL-JSON abstracts and live PubMed/EuropePMC abstracts, including flagging primary/historical discoveries attributed solely to secondary Review articles and preprints that now have a published Version of Record.
